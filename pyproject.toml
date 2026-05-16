@@ -1,0 +1,22 @@
+[project]
+name = "firedrone"
+version = "0.1.0"
+description = "Autonomous fire-response drone agent built on NimbusOS"
+readme = "README.md"
+authors = [
+    { name = "Abdul Rahim Mirani", email = "abdulrahimmirani@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "nimbusos-sdk>=0.1.4",
+    "pynput>=1.8.2",
+    "rich>=15.0.0",
+]
+
+[project.scripts]
+firedrone-teleop = "firedrone.teleop:main"
+firedrone-telemetry = "firedrone.scripts.print_telemetry:main"
+
+[build-system]
+requires = ["uv_build>=0.11.6,<0.12.0"]
+build-backend = "uv_build"
