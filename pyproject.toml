@@ -20,3 +20,6 @@ firedrone-telemetry = "firedrone.scripts.print_telemetry:main"
 [build-system]
 requires = ["uv_build>=0.11.6,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
