@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FireDrone — Tello Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark"></span>
+      <span class="brand-name">FireDrone <em>·</em> Tello</span>
+    </div>
+
+    <div class="status-cluster">
+      <span id="status-conn"   class="badge badge-gray">disconnected</span>
+      <span id="status-stream" class="badge badge-gray">stream off</span>
+      <span id="status-fly"    class="badge badge-gray">grounded</span>
+    </div>
+
+    <button id="btn-emergency" class="btn btn-emergency" title="Cut motors (Esc)">
+      EMERGENCY
+    </button>
+  </header>
+
+  <main class="layout">
+    <section class="video-pane">
+      <div class="video-frame">
+        <img id="video" alt="Tello live video feed" />
+        <div id="video-overlay" class="video-overlay">
+          <div class="video-overlay-text">No video yet. Click Connect.</div>
+        </div>
+      </div>
+    </section>
+
+    <aside class="side-pane">
+      <section class="card">
+        <h2 class="card-title">Connection</h2>
+        <div class="row">
+          <button id="btn-connect" class="btn btn-primary">Connect</button>
+          <button id="btn-disconnect" class="btn">Disconnect</button>
+        </div>
+        <div id="last-error" class="error-line" hidden></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Telemetry</h2>
+        <dl class="telemetry-grid">
+          <dt>Battery</dt>     <dd><span id="t-battery">—</span> %</dd>
+          <dt>Height (ToF)</dt><dd><span id="t-tof">—</span> cm</dd>
+          <dt>Height (baro)</dt><dd><span id="t-height">—</span> cm</dd>
+          <dt>Flight time</dt> <dd><span id="t-flight">—</span> s</dd>
+          <dt>Yaw</dt>         <dd><span id="t-yaw">—</span> °</dd>
+          <dt>Pitch / Roll</dt><dd><span id="t-pitch">—</span> / <span id="t-roll">—</span> °</dd>
+          <dt>Speed (x/y/z)</dt><dd><span id="t-sx">—</span> / <span id="t-sy">—</span> / <span id="t-sz">—</span></dd>
+          <dt>Temperature</dt> <dd><span id="t-temp">—</span> °C</dd>
+        </dl>
+        <div class="status-line">
+          <span class="muted">last status:</span>
+          <span id="t-status">—</span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Flight</h2>
+        <div class="row">
+          <button id="btn-takeoff" class="btn btn-primary" data-action="takeoff">Takeoff <kbd>T</kbd></button>
+          <button id="btn-land"    class="btn"             data-action="land">Land <kbd>L</kbd></button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Motion <span class="muted">(30 cm / 30°)</span></h2>
+        <div class="pad pad-translate">
+          <button class="btn pad-btn"   data-action="move" data-direction="forward"><kbd>W</kbd> ↑</button>
+          <button class="btn pad-btn"   data-action="move" data-direction="left"   ><kbd>A</kbd> ←</button>
+          <button class="btn pad-btn"   data-action="move" data-direction="back"   ><kbd>S</kbd> ↓</button>
+          <button class="btn pad-btn"   data-action="move" data-direction="right"  ><kbd>D</kbd> →</button>
+          <button class="btn pad-btn"   data-action="move" data-direction="up"     ><kbd>␣</kbd> up</button>
+          <button class="btn pad-btn"   data-action="move" data-direction="down"   ><kbd>Ctrl</kbd> down</button>
+        </div>
+        <div class="row">
+          <button class="btn" data-action="rotate" data-direction="ccw"><kbd>Q</kbd> ⟲ yaw L</button>
+          <button class="btn" data-action="rotate" data-direction="cw" ><kbd>E</kbd> ⟳ yaw R</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Flips <span class="muted">(needs &gt; 50% batt)</span></h2>
+        <div class="row row-wrap">
+          <button class="btn" data-action="flip" data-direction="f"><kbd>1</kbd> fwd</button>
+          <button class="btn" data-action="flip" data-direction="b"><kbd>2</kbd> back</button>
+          <button class="btn" data-action="flip" data-direction="l"><kbd>3</kbd> left</button>
+          <button class="btn" data-action="flip" data-direction="r"><kbd>4</kbd> right</button>
+        </div>
+      </section>
+    </aside>
+
+    <section class="log-pane">
+      <header class="log-header">
+        <h2 class="card-title">Event log</h2>
+        <button id="btn-clear-log" class="btn btn-small">clear</button>
+      </header>
+      <ol id="event-log" class="event-log"></ol>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
