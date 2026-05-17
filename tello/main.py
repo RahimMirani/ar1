@@ -27,12 +27,18 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
-from drone import Drone, VALID_FLIP_DIRECTIONS
-
 import cv2
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+# Load tello/.env before importing modules that read API keys at import.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from drone import Drone, VALID_FLIP_DIRECTIONS  # noqa: E402
+from events import bus  # noqa: E402
+from vision import analyze_frame  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,6 +60,10 @@ drone = Drone()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logger.info("starting up tello dashboard")
+    # Producers in background threads (audio capture, perception watchdog,
+    # agent worker) publish via bus.publish_threadsafe, which needs the
+    # running loop.
+    bus.attach_loop(asyncio.get_running_loop())
     try:
         yield
     finally:
@@ -75,6 +85,61 @@ async def index() -> FileResponse:
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# --------------------------------------------------------------------------- #
+# Event bus WebSocket — fan-out for vision/audio/agent/notifier events
+# --------------------------------------------------------------------------- #
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket) -> None:
+    """Subscribe to the structured event bus.
+
+    Both the operator console and the dispatcher dashboard connect here
+    and receive the same stream (vision results, audio alarms, agent
+    reasoning, incidents, etc.). One subscriber queue per connection.
+    """
+    await websocket.accept()
+    queue = bus.subscribe()
+    try:
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        logger.info("events websocket closed")
+    except Exception as exc:
+        logger.warning("events websocket error: %s", exc)
+    finally:
+        bus.unsubscribe(queue)
+
+
+# --------------------------------------------------------------------------- #
+# Vision — one-shot "analyze current view"
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze() -> dict[str, Any]:
+    """Grab the most recent frame and run it through the vision model.
+
+    Result is also broadcast on ``/ws/events`` so the dispatcher
+    dashboard receives the same payload without an extra round-trip.
+    """
+    frame = drone.get_frame()
+    if frame is None:
+        return {"error": "no frame available — connect the drone and start the stream"}
+
+    try:
+        result = await asyncio.to_thread(analyze_frame, frame)
+    except Exception as exc:
+        msg = f"vision analyze failed: {exc}"
+        logger.warning(msg)
+        return {"error": msg}
+
+    payload = result.to_dict()
+    await bus.publish({"type": "vision_result", "source": "manual", **payload})
+    return payload
 
 
 # --------------------------------------------------------------------------- #

@@ -81,6 +81,19 @@ const els = {
     yaw:  $("vel-yaw"),
   },
   batteryBar: $("battery-bar"),
+
+  vision: {
+    btn:      $("btn-vision-analyze"),
+    result:   $("vision-result"),
+    severity: $("vision-severity"),
+    chips:    $("vision-chips"),
+    conf:     $("vision-conf"),
+    desc:     $("vision-desc"),
+    reasons:  $("vision-reasons"),
+    thumb:    $("vision-thumb"),
+    meta:     $("vision-meta"),
+    error:    $("vision-error"),
+  },
 };
 
 const state = {
@@ -589,8 +602,113 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) clearHeldKeys();
 });
 
+// ====================================================================
+// AI event channel — vision, audio, perception, agent, notifier all
+// fan out over the same /ws/events stream. We register a handler per
+// event.type and dispatch.
+// ====================================================================
+
+const eventHandlers = {};
+
+function connectEventsWs() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${proto}://${location.host}/ws/events`;
+  const ws = new WebSocket(url);
+  ws.onopen  = () => log("info", "events stream connected");
+  ws.onclose = () => {
+    log("warn", "events stream disconnected, retrying...");
+    setTimeout(connectEventsWs, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    let payload;
+    try { payload = JSON.parse(ev.data); }
+    catch (err) { log("error", `bad event payload: ${err}`); return; }
+    const fn = eventHandlers[payload.type];
+    if (fn) fn(payload);
+  };
+}
+
+// ----------------------------- vision ----------------------------- //
+
+function renderVisionResult(p) {
+  if (!els.vision.result) return;
+  els.vision.result.hidden = false;
+  els.vision.error.hidden  = true;
+
+  const sev = p.severity || "none";
+  els.vision.severity.dataset.severity = sev;
+  els.vision.severity.textContent      = sev;
+
+  els.vision.chips.replaceChildren();
+  const addChip = (label, on, red) => {
+    const s = document.createElement("span");
+    s.className = "vision-chip" + (on ? (red ? " on-red" : " on") : "");
+    s.textContent = label;
+    els.vision.chips.appendChild(s);
+  };
+  addChip("fire",  !!p.fire_visible, true);
+  addChip("smoke", !!p.smoke_visible, false);
+
+  const cpct = Math.round((p.confidence || 0) * 100);
+  els.vision.conf.textContent = `${cpct}% conf`;
+
+  els.vision.desc.textContent = p.description || "";
+
+  els.vision.reasons.replaceChildren();
+  for (const r of (p.reasons || [])) {
+    const li = document.createElement("li");
+    li.textContent = r;
+    els.vision.reasons.appendChild(li);
+  }
+
+  if (p.thumbnail_b64) {
+    els.vision.thumb.src = `data:image/jpeg;base64,${p.thumbnail_b64}`;
+    els.vision.thumb.hidden = false;
+  } else {
+    els.vision.thumb.hidden = true;
+  }
+
+  const src = p.source || "manual";
+  els.vision.meta.textContent = `${p.model || "?"} · ${src} · ${p.latency_ms ?? "?"} ms`;
+
+  const lvl = (p.fire_visible || sev === "high") ? "error"
+            : (p.smoke_visible || sev === "medium") ? "warn"
+            : "info";
+  log(lvl, `vision (${src}): ${sev}${p.fire_visible ? " · fire" : ""}${p.smoke_visible ? " · smoke" : ""}`);
+}
+
+eventHandlers["vision_result"] = renderVisionResult;
+
+if (els.vision.btn) {
+  els.vision.btn.addEventListener("click", async () => {
+    els.vision.btn.disabled = true;
+    els.vision.btn.textContent = "Analyzing...";
+    els.vision.error.hidden = true;
+    try {
+      const res = await fetch("/api/vision/analyze", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        els.vision.error.hidden = false;
+        els.vision.error.textContent = data.error;
+        log("error", `vision: ${data.error}`);
+      } else {
+        renderVisionResult({ source: "manual", ...data });
+      }
+    } catch (err) {
+      els.vision.error.hidden = false;
+      els.vision.error.textContent = String(err);
+      log("error", `vision: ${err}`);
+    } finally {
+      els.vision.btn.disabled = false;
+      els.vision.btn.textContent = "Analyze current view";
+    }
+  });
+}
+
 // ----------------------------- boot ---------------------------------- //
 
 log("info", "dashboard loaded");
 connectTelemetryWs();
 connectControlWs();
+connectEventsWs();
