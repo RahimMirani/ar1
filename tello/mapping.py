@@ -486,17 +486,25 @@ class Mapper:
         lockout_now = self._lockout_count >= LOCKOUT_CONSECUTIVE_TICKS
 
         # --- rotate to world frame and integrate ---
-        # theta is the drone's world heading in radians. With our chosen
-        # convention (yaw_deg increases clockwise → world is mirrored y)
-        # the rotation matrix that takes (body_forward, body_right) into
-        # (world_x = +takeoff-forward, world_y = +takeoff-right) is:
-        #   [cos θ  sin θ]   (because both heading and y-right are CW
-        #   [-sin θ cos θ]    when viewed from above).
+        # theta is the drone's world heading. World axes: +x = the
+        # direction the camera was pointing at takeoff, +y = the
+        # drone's right at takeoff (i.e. the *operator's* right when
+        # looking down from above). Tello yaw is CW-positive, which
+        # under those axes means a +90° yaw aligns body-forward with
+        # world +y — and the matching rotation IS the standard 2D
+        # rotation matrix:
+        #
+        #   v_world_x = v_x_body * cos θ - v_y_body * sin θ
+        #   v_world_y = v_x_body * sin θ + v_y_body * cos θ
+        #
+        # (The earlier draft used the wrong sign convention; verified
+        # against the smoke test §2 — heading 90° + forward must move
+        # the drone in +y, not -y.)
         theta = math.radians(_as_float(tele.get("yaw_deg"), 0.0))
         cos_t = math.cos(theta)
         sin_t = math.sin(theta)
-        vx_w_cmps = vx_b * cos_t + vy_b * sin_t
-        vy_w_cmps = -vx_b * sin_t + vy_b * cos_t
+        vx_w_cmps = vx_b * cos_t - vy_b * sin_t
+        vy_w_cmps = vx_b * sin_t + vy_b * cos_t
 
         # If lockout is suspected, freeze the position integral but keep
         # heading + velocity smoothing fresh so we pick up cleanly when
