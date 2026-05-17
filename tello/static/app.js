@@ -129,6 +129,15 @@ const els = {
     findingSummary:  $("agent-finding-summary"),
     findingReasons:  $("agent-finding-reasons"),
   },
+
+  banner: {
+    root:    $("incident-banner"),
+    verdict: $("incident-banner-verdict"),
+    title:   $("incident-banner-title"),
+    summary: $("incident-banner-summary"),
+    meta:    $("incident-banner-meta"),
+    dismiss: $("incident-banner-dismiss"),
+  },
 };
 
 const state = {
@@ -990,6 +999,50 @@ eventHandlers["agent_finding"]     = renderAgentFinding;
 eventHandlers["agent_skipped"] = (p) => {
   log("warn", `agent auto-trigger skipped: ${p.reason} (trigger=${p.trigger || "?"})`);
 };
+
+// ----------------------------- incident banner ----------------------------- //
+
+function renderIncident(p) {
+  if (!els.banner.root) return;
+  els.banner.root.hidden = false;
+  const v = p.verdict || "unknown";
+  els.banner.root.dataset.verdict = v;
+  if (els.banner.verdict) {
+    els.banner.verdict.dataset.verdict = v;
+    els.banner.verdict.textContent     = v.replace("_", " ");
+  }
+  if (els.banner.title)   els.banner.title.textContent   = p.title || "Incident";
+  if (els.banner.summary) els.banner.summary.textContent = p.summary || "";
+  if (els.banner.meta) {
+    els.banner.meta.textContent =
+      `${p.evidence?.length ?? 0} evidence · ${p.notified_dept ? "DISPATCHED" : "no dispatch"}`;
+  }
+  const lvl = v === "real_fire" ? "error" : (v === "false_alarm" ? "warn" : "info");
+  log(lvl, `incident ${v}: ${p.summary || p.title || ""}`);
+}
+
+eventHandlers["incident"] = renderIncident;
+
+eventHandlers["webhook_delivery"] = (p) => {
+  if (p.error) log("error", `webhook -> ${p.url}: ${p.error}`);
+  else         log("info",  `webhook -> ${p.url}: ${p.status}`);
+};
+
+if (els.banner.dismiss) {
+  els.banner.dismiss.addEventListener("click", () => {
+    els.banner.root.hidden = true;
+  });
+}
+
+// On load, fetch the most recent incident (if any) so reloading the
+// page doesn't lose the banner that was on screen a moment ago.
+(async function loadLatestIncident() {
+  try {
+    const res = await fetch("/api/incidents/latest");
+    const data = await res.json();
+    if (data.incident) renderIncident(data.incident);
+  } catch (_) { /* offline ok */ }
+})();
 
 if (els.agent.start) {
   els.agent.start.addEventListener("click", async () => {

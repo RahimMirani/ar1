@@ -10,6 +10,18 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+  <div id="incident-banner" class="incident-banner" hidden>
+    <div class="incident-banner-inner">
+      <span id="incident-banner-verdict" class="incident-verdict-pill" data-verdict="unknown">—</span>
+      <div class="incident-banner-text">
+        <span id="incident-banner-title" class="incident-banner-title">—</span>
+        <span id="incident-banner-summary" class="incident-banner-summary"></span>
+      </div>
+      <span id="incident-banner-meta" class="incident-banner-meta"></span>
+      <button id="incident-banner-dismiss" class="incident-banner-dismiss" aria-label="dismiss">×</button>
+    </div>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">

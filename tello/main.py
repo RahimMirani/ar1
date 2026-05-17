@@ -47,6 +47,7 @@ from agent import (  # noqa: E402
     is_busy as agent_is_busy,
     run_mission,
 )
+from notifier import run_notifier_loop, latest_incident  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -84,16 +85,18 @@ async def lifespan(_app: FastAPI):
     # agent worker) publish via bus.publish_threadsafe, which needs the
     # running loop.
     bus.attach_loop(asyncio.get_running_loop())
-    bridge_task = asyncio.create_task(_audio_alarm_to_agent_bridge())
+    bridge_task   = asyncio.create_task(_audio_alarm_to_agent_bridge())
+    notifier_task = asyncio.create_task(run_notifier_loop())
     try:
         yield
     finally:
         logger.info("shutting down: closing drone")
-        bridge_task.cancel()
-        try:
-            await bridge_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        for task in (bridge_task, notifier_task):
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         drone.close()
 
 
@@ -324,6 +327,19 @@ async def _run_mission_task(trigger: str) -> None:
         await run_mission(trigger)
     except Exception as exc:
         logger.exception("mission task crashed: %s", exc)
+
+
+# --------------------------------------------------------------------------- #
+# Incidents — the most recent notifier-emitted incident
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/incidents/latest")
+async def api_incident_latest() -> dict[str, Any]:
+    inc = latest_incident()
+    if inc is None:
+        return {"incident": None}
+    return {"incident": inc}
 
 
 # --------------------------------------------------------------------------- #
