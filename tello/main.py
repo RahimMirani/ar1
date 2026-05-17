@@ -42,6 +42,7 @@ from vision import analyze_frame  # noqa: E402
 from audio import monitor as audio_monitor  # noqa: E402
 from perception import OpticalFlowWatchdog, check_path_clear  # noqa: E402
 from depth_stream import DEPTH_HZ, DepthStream  # noqa: E402
+from mapping import RENDER_HZ as MAP_RENDER_HZ, Mapper  # noqa: E402
 from agent import (  # noqa: E402
     configure as agent_configure,
     mission_state,
@@ -79,9 +80,20 @@ perception_watchdog = OpticalFlowWatchdog(
 # the Depth view toggle in the console.
 depth_stream = DepthStream(get_frame=drone.get_frame)
 
-# Inject the live drone + watchdog into agent.py so its @function_tool
-# callables can drive them.
-agent_configure(drone, perception_watchdog)
+# Mapping layer — 2D dead-reckoned pose + MiDaS occupancy grid. Pure
+# consumer: reads telemetry / frame / flying state through Drone
+# accessors, never calls djitellopy. Auto-resets on the takeoff
+# transition the pose loop observes, so we don't have to plumb a
+# reset() call through the takeoff command path.
+mapper = Mapper(
+    get_telemetry=lambda: drone.snapshot().telemetry,
+    get_frame=drone.get_frame,
+    get_flying=lambda: drone.snapshot().flying,
+)
+
+# Inject the live drone + watchdog + mapper into agent.py so its
+# @function_tool callables can drive them.
+agent_configure(drone, perception_watchdog, mapper)
 
 
 @asynccontextmanager
@@ -104,6 +116,7 @@ async def lifespan(_app: FastAPI):
             except (asyncio.CancelledError, Exception):
                 pass
         depth_stream.stop()
+        mapper.stop()
         drone.close()
 
 
@@ -359,6 +372,93 @@ def _depth_mjpeg_generator():
 async def depth_mjpg() -> StreamingResponse:
     return StreamingResponse(
         _depth_mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Mapping (2D dead-reckon + occupancy grid)
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/map/start")
+async def api_map_start() -> dict[str, Any]:
+    return (await asyncio.to_thread(mapper.start)).to_dict()
+
+
+@app.post("/api/map/stop")
+async def api_map_stop() -> dict[str, Any]:
+    return (await asyncio.to_thread(mapper.stop)).to_dict()
+
+
+@app.post("/api/map/reset")
+async def api_map_reset() -> dict[str, Any]:
+    """Re-anchor the map at the drone's current position.
+
+    The mapper auto-resets on takeoff, so this is mostly a debug /
+    operator escape hatch — useful if you want to clear the canvas
+    mid-flight to focus on a specific area.
+    """
+    return (await asyncio.to_thread(mapper.reset)).to_dict()
+
+
+@app.get("/api/map/status")
+async def api_map_status() -> dict[str, Any]:
+    return mapper.status().to_dict()
+
+
+@app.get("/api/map/snapshot")
+async def api_map_snapshot() -> dict[str, Any]:
+    """Lightweight pose + trajectory + obstacle summary, JSON only.
+
+    Mirrors what the agent's ``get_map_summary`` tool returns, but
+    accessible to the dashboard for debugging / verification without
+    spinning up the agent.
+    """
+    return mapper.snapshot().to_dict()
+
+
+def _map_mjpeg_generator():
+    """Yield map JPEG frames as multipart/x-mixed-replace.
+
+    Same shape as :func:`_depth_mjpeg_generator` — the renderer pre-
+    encodes on its own ~2 Hz thread; we just poll the cached buffer at
+    that cadence. If the stream is stopped (or hasn't produced its
+    first frame yet) we keep the connection open and resume as soon as
+    a frame is available, so the dashboard ``<img>`` tag doesn't
+    flash-and-die on a toggle.
+    """
+    boundary = b"--frame"
+    period = 1.0 / MAP_RENDER_HZ
+    last_sent_id: int | None = None
+    last_payload: bytes | None = None
+    while True:
+        time.sleep(period)
+        payload = mapper.latest_jpeg()
+        if payload is None:
+            if last_payload is None:
+                continue
+            payload = last_payload
+        else:
+            if id(payload) == last_sent_id:
+                continue
+            last_sent_id = id(payload)
+            last_payload = payload
+
+        yield (
+            boundary
+            + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+            + str(len(payload)).encode()
+            + b"\r\n\r\n"
+            + payload
+            + b"\r\n"
+        )
+
+
+@app.get("/map.mjpg")
+async def map_mjpg() -> StreamingResponse:
+    return StreamingResponse(
+        _map_mjpeg_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
