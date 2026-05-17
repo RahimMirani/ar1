@@ -3,9 +3,6 @@ name = "firedrone"
 version = "0.1.0"
 description = "Autonomous fire-response drone agent built on NimbusOS"
 readme = "README.md"
-authors = [
-    { name = "Abdul Rahim Mirani", email = "abdulrahimmirani@gmail.com" }
-]
 requires-python = ">=3.12"
 dependencies = [
     "nimbusos-sdk>=0.1.4",
