@@ -131,8 +131,8 @@ def check_path_clear(
     frame_bgr: np.ndarray,
     *,
     direction: str = "forward",
-    near_threshold: float = 0.55,
-    obstacle_max_ratio: float = 0.20,
+    near_threshold: float = 0.78,
+    obstacle_max_ratio: float = 0.40,
 ) -> PathCheck:
     """Decide if a flight direction is safe given a single camera frame.
 
@@ -142,8 +142,16 @@ def check_path_clear(
     pixels whose normalised value is above ``near_threshold``. If that
     share exceeds ``obstacle_max_ratio`` we declare the path blocked.
 
-    The thresholds are conservative defaults chosen for indoor demos.
-    Both are tunable by the caller; the agent uses the defaults.
+    Threshold tuning note: because we normalise *per frame*, the
+    nearest pixel in any view always scores 1.0, even if it's actually
+    several metres out. With a global ``near_threshold`` of 0.55 and
+    ``obstacle_max_ratio`` of 0.20 (early defaults) realistic indoor
+    scenes — where the central patch naturally contains "in front of
+    me" content — got refused almost universally. The current defaults
+    (0.78 / 0.40) reject the cases the watchdog wouldn't already catch
+    (a wall or person filling most of the camera) without false-firing
+    on a normal cluttered living room. Both remain tunable by the
+    caller.
     """
     t0 = time.monotonic()
     inv_depth = _midas_inverse_depth(frame_bgr)

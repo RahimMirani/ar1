@@ -265,16 +265,23 @@ def move(direction: str, distance_cm: int) -> str:
         # Depth check on motion that brings new scenery in front of the
         # camera. (Back/up/down all show the same scene the camera was
         # already pointing at, so a MiDaS check is uninformative for
-        # those.)
+        # those.) We publish the result either way so the operator
+        # console can show *why* a refusal happened, not just the tool
+        # error string.
         if d in {"forward", "left", "right"}:
             frame = _drone.get_frame()
             if frame is not None:
                 check = perception_check(frame, direction=d)
+                bus.publish_threadsafe(
+                    {"type": "perception_check", "source": "move_tool",
+                     "mission_id": mission_state.mission_id, **check.to_dict()}
+                )
                 if check.available and not check.clear:
                     return (
                         f"REFUSED: depth check says {d} is blocked "
                         f"(obstacle ratio {check.obstacle_ratio:.0%}). "
-                        "Try a different direction or rotate first."
+                        "Try rotating, or use `move(\"back\", ...)` to "
+                        "back away — back never needs a depth check."
                     )
         _drone.move(d, cm)
         return f"OK - moved {d} {cm} cm."
@@ -410,12 +417,27 @@ Mission shape (a template — adapt to what the space looks like):
        * Four-corner: forward 150, rotate 90, forward 150, rotate 90,
                       forward 150, rotate 90, forward 150 — back to origin.
        * Hallway probe: forward 200, analyze, rotate 180, forward 200, analyze.
-     Always `check_path_clear` before a forward step. If REFUSED, treat it as
-     useful information — that direction has a wall or obstacle. Pick another.
+     Always `check_path_clear` before a forward step. If REFUSED, treat it
+     as useful information — that direction has a wall or obstacle. Pick
+     another. **Do not give up on lateral motion** — covering ground is the
+     mission. If a `move("forward", ...)` call is REFUSED, your next move
+     should be either `rotate(90)` and re-check, or `move("back", 100-150)`
+     to retreat into clear space, or `move("left", ...)` / `move("right",
+     ...)`. `move("up"/"down", ...)` does not count as "exploring" — it
+     just changes altitude.
   5. **Return**: rotate roughly back toward your start so the operator's
      orientation makes sense, then `land()`.
   6. Call `report_finding(verdict, summary, reasons)` exactly once.
   7. One short closing sentence is enough.
+
+Direction reference:
+
+  * `forward` / `left` / `right` — go through the MiDaS depth check.
+    May be REFUSED if the path is blocked.
+  * `back` — always available. Use this to retreat from a refused
+    forward, or to back up for a wider view before analyze.
+  * `up` / `down` — always available, but altitude changes do not
+    fulfil the "visit distinct positions" requirement.
 
 Decision rules:
 
