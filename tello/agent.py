@@ -51,14 +51,15 @@ logger = logging.getLogger("tello.agent")
 # reasoning + tool-calling for the autonomous mission; gpt-4o is the
 # best trade-off of tool-call reliability and latency we have.
 #
-# Mission budget + max-turns are sized for *exploratory* missions: a
-# typical roam pattern is takeoff + 3-4 (move, analyze, rotate, analyze)
-# sequences + land + report, which lands around 18-24 LLM turns and
-# 90-150 s of wall clock. 180 s and 28 turns give us a comfortable
-# margin without letting the drone wander indefinitely.
+# Mission budget + max-turns are sized for *thorough exploratory*
+# missions. The expected pattern is takeoff + 4-5 (move, analyze,
+# rotate, analyze) sequences + land + report, which lands around
+# 24-32 LLM turns and 120-200 s of wall clock. 240 s and 36 turns
+# give the agent room to cover the whole 5 m radius without letting
+# it wander indefinitely.
 AGENT_MODEL = "gpt-4o"
-MISSION_BUDGET_SEC = float(os.getenv("FIREDRONE_AGENT_BUDGET_SEC", "180"))
-MAX_TURNS = int(os.getenv("FIREDRONE_AGENT_MAX_TURNS", "28"))
+MISSION_BUDGET_SEC = float(os.getenv("FIREDRONE_AGENT_BUDGET_SEC", "240"))
+MAX_TURNS = int(os.getenv("FIREDRONE_AGENT_MAX_TURNS", "36"))
 
 VALID_VERDICTS = {"real_fire", "false_alarm", "unknown"}
 
@@ -179,15 +180,27 @@ def _tool(name: str, args: dict[str, Any]) -> Callable[[Callable[[], str]], str]
 
 @function_tool
 def takeoff() -> str:
-    """Take off from the ground. Must be called once before any motion.
-    The obstacle watchdog auto-arms on takeoff."""
+    """Take off and climb to the standard patrol altitude (~1.5 m AGL).
+    Must be called once before any motion. The obstacle watchdog
+    auto-arms on takeoff."""
     def body() -> str:
         if _drone is None:
             return "ERROR: drone not configured"
         _drone.takeoff()
         if _watchdog is not None:
             _watchdog.start()
-        return "OK - drone is in the air; obstacle watchdog armed."
+        # Tello's default takeoff lifts to ~80-100 cm. Add ~70 cm so
+        # the drone is consistently around 1.5 m for the rest of the
+        # patrol — high enough to see over couches, counters, and
+        # most floor clutter, low enough to stay clear of light
+        # fixtures and ceiling fans in a normal home. We do this in
+        # code (not in the prompt) so it always happens and doesn't
+        # cost the agent a planning turn.
+        try:
+            _drone.move("up", 70)
+        except Exception as exc:
+            logger.warning("post-takeoff climb to patrol altitude failed: %s", exc)
+        return "OK - airborne at ~1.5 m patrol altitude; watchdog armed."
     return _tool("takeoff", {})(body)
 
 
@@ -362,6 +375,23 @@ def report_finding(verdict: str, summary: str, reasons: list[str]) -> str:
         v = verdict.strip().lower()
         if v not in VALID_VERDICTS:
             return f"ERROR: verdict must be one of {sorted(VALID_VERDICTS)}"
+
+        # Soft enforcement: clearing an alarm requires *coverage*, not
+        # just a glance. Real fires can still be reported quickly with
+        # sparse evidence (any single severity="high" analyze_view
+        # capture is enough for the model to justify real_fire), but
+        # false_alarm must be backed by analyze_view results from
+        # multiple vantage points across the room. Two clean captures
+        # from the same spot are not enough to clear a fire alarm.
+        if v == "false_alarm" and len(mission_state.evidence) < 4:
+            return (
+                "ERROR: false_alarm requires at least 4 analyze_view "
+                f"captures from distinct positions; you have "
+                f"{len(mission_state.evidence)}. Move to a new "
+                "position, call analyze_view there, then retry "
+                "report_finding."
+            )
+
         mission_state.verdict = v
         mission_state.summary = summary
         mission_state.reasons = list(reasons)
@@ -394,40 +424,54 @@ small office.
 
 Treat this like an actual search, not a stationary check: don't just rotate
 where you are — *go look*. Your operational radius is about 5 metres from the
-takeoff point. Visit at least **three distinct positions** in the space and
+takeoff point. Visit **at least four distinct positions** in the space and
 inspect each from 2-3 angles before submitting a verdict. The point of the
 mission is to confidently say "I checked everywhere reasonable and saw X" —
 that's only credible if you actually moved through the room.
 
 Mission shape (a template — adapt to what the space looks like):
 
-  1. `takeoff()`. You're now hovering about 80-100 cm above the floor.
+  1. `takeoff()`. The takeoff tool automatically climbs to ~1.5 m AGL, so
+     you start the mission already at patrol altitude. You should not need
+     to call `move("up", ...)` at all in a normal mission — leave altitude
+     alone and focus on lateral coverage.
   2. **Initial scan from takeoff position.** Call `analyze_view()`. If it
      comes back fire_visible=true with confidence >= 0.6, fast-track to
      report — do one corroborating capture from a different angle, then land
      and report real_fire.
   3. **Patrol outward.** Pick a direction (start with what the camera sees).
-     Call `check_path_clear("forward")` — if clear, `move("forward", 120-200)`.
+     Call `check_path_clear("forward")` — if clear, `move("forward", 150-200)`.
      Otherwise rotate 45-90 deg and try again. At the new position call
      `analyze_view()`. Then `rotate(90)` and analyze again to cover the side
      you couldn't see from the previous spot.
-  4. **Visit at least two more distinct positions.** Good shapes:
-       * Triangle: forward 150 -> rotate 120 -> forward 150 -> rotate 120
-                   -> forward 150 (which brings you back near start).
-       * Four-corner: forward 150, rotate 90, forward 150, rotate 90,
-                      forward 150, rotate 90, forward 150 — back to origin.
-       * Hallway probe: forward 200, analyze, rotate 180, forward 200, analyze.
+  4. **Visit at least three more distinct positions.** Good shapes:
+       * Diamond: forward 180 -> rotate 90 -> forward 150 -> rotate 90 ->
+                  forward 180 -> rotate 90 -> forward 150 (back near start).
+       * Hallway sweep: forward 200, analyze, forward 200, analyze, rotate
+                        180, forward 200, analyze, forward 200, analyze.
+       * Wide arc: forward 150, rotate 45, forward 150, rotate 45,
+                   forward 150 — fans out across the open space.
      Always `check_path_clear` before a forward step. If REFUSED, treat it
      as useful information — that direction has a wall or obstacle. Pick
-     another. **Do not give up on lateral motion** — covering ground is the
+     another. **Do not give up on lateral motion** — covering ground IS the
      mission. If a `move("forward", ...)` call is REFUSED, your next move
      should be either `rotate(90)` and re-check, or `move("back", 100-150)`
      to retreat into clear space, or `move("left", ...)` / `move("right",
-     ...)`. `move("up"/"down", ...)` does not count as "exploring" — it
-     just changes altitude.
+     ...)`. **Vertical motion is not exploration** — `move("up"/"down", ...)`
+     does not count toward your distinct-position requirement.
+
+     In a typical empty home or office, the depth check will return CLEAR
+     for forward most of the time. That is your *green light* to push
+     forward with confidence, not a hint to stop early. Open rooms and
+     hallways should get long forward moves (180-200 cm), not 60 cm hops.
+     Save the small steps for tight spots where you're inspecting a
+     specific area.
   5. **Return**: rotate roughly back toward your start so the operator's
      orientation makes sense, then `land()`.
-  6. Call `report_finding(verdict, summary, reasons)` exactly once.
+  6. Call `report_finding(verdict, summary, reasons)` exactly once. The
+     report_finding tool will REFUSE a false_alarm verdict if you have
+     fewer than four analyze_view captures on record — that's the
+     "you actually patrolled" check.
   7. One short closing sentence is enough.
 
 Direction reference:
@@ -532,11 +576,13 @@ async def run_mission(trigger: str = "manual") -> MissionState:
         user_prompt = (
             "A fire alarm has just been triggered. "
             f"Trigger source: {trigger}. "
-            "Patrol the home within ~5 m of the takeoff point. Visit "
-            "multiple distinct positions and inspect each visually before "
-            "deciding. Only submit a finding after you have evidence from "
-            "at least three different vantage points (unless you confirm a "
-            "real fire earlier, in which case wrap up immediately)."
+            "Patrol the home within ~5 m of the takeoff point. The expected "
+            "shape is: takeoff -> at least FOUR different positions, each "
+            "with one or two analyze_view captures -> land -> report. The "
+            "depth feed will usually say 'forward CLEAR' inside an empty "
+            "home; that's permission to keep moving, not a reason to land. "
+            "Only short-circuit this pattern if you actually see fire/smoke "
+            "with high confidence — in that case wrap up immediately."
         )
 
         mission_state.state = "running"
