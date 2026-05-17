@@ -61,15 +61,15 @@ uv run python scripts/smoke_video.py       # OpenCV window with live feed
 
 Live motion is **hold-to-fly**: press and hold a key to fly continuously in
 that direction, release to stop. Hold combinations work naturally
-(e.g. `↑ + →` flies diagonally forward-right).
+(e.g. `W + D` flies diagonally forward-right).
 
 | Key                       | Action                              |
 | ------------------------- | ----------------------------------- |
 | `T`                       | Takeoff                             |
 | `L`                       | Land                                |
 | `Esc`                     | **EMERGENCY** (cuts motors)         |
-| `↑` / `↓`                 | Forward / back (hold)               |
-| `←` / `→`                 | Left / right (hold)                 |
+| `W` / `S`                 | Forward / back (hold)               |
+| `A` / `D`                 | Left / right (hold)                 |
 | `Space` / `Shift`         | Up / down (hold)                    |
 | `Q` / `E`                 | Yaw left / right (hold)             |
 | `1` / `2` / `3` / `4`     | Flip forward / back / left / right  |

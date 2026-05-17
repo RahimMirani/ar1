@@ -246,7 +246,7 @@ const VELOCITY = {
 };
 
 const HOLD_KEYS = new Set([
-  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "KeyW", "KeyS", "KeyA", "KeyD",
   "Space", "ShiftLeft", "ShiftRight",
   "KeyQ", "KeyE",
 ]);
@@ -257,10 +257,10 @@ let   lastSentVel = { lr: 0, fb: 0, ud: 0, yaw: 0 };
 function recomputeVelocity() {
   let lr = 0, fb = 0, ud = 0, yaw = 0;
 
-  if (heldKeys.has("ArrowUp"))    fb += VELOCITY.FB;
-  if (heldKeys.has("ArrowDown"))  fb -= VELOCITY.FB;
-  if (heldKeys.has("ArrowRight")) lr += VELOCITY.LR;
-  if (heldKeys.has("ArrowLeft"))  lr -= VELOCITY.LR;
+  if (heldKeys.has("KeyW")) fb += VELOCITY.FB;
+  if (heldKeys.has("KeyS")) fb -= VELOCITY.FB;
+  if (heldKeys.has("KeyD")) lr += VELOCITY.LR;
+  if (heldKeys.has("KeyA")) lr -= VELOCITY.LR;
   if (heldKeys.has("Space"))      ud += VELOCITY.UD;
   if (heldKeys.has("ShiftLeft") || heldKeys.has("ShiftRight")) ud -= VELOCITY.UD;
   if (heldKeys.has("KeyE"))       yaw += VELOCITY.YAW;
