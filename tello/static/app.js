@@ -115,6 +115,20 @@ const els = {
     lastAlert: $("perception-last-alert"),
     result:    $("perception-check-result"),
   },
+
+  agent: {
+    start:           $("btn-agent-start"),
+    badge:           $("agent-state-badge"),
+    meta:            $("agent-meta"),
+    missionId:       $("agent-mission-id"),
+    elapsed:         $("agent-elapsed"),
+    transcript:      $("agent-transcript"),
+    finding:         $("agent-finding"),
+    findingVerdict:  $("agent-finding-verdict"),
+    findingMeta:     $("agent-finding-meta"),
+    findingSummary:  $("agent-finding-summary"),
+    findingReasons:  $("agent-finding-reasons"),
+  },
 };
 
 const state = {
@@ -839,6 +853,155 @@ if (els.perception.check) {
       log("error", `perception: ${err}`);
     } finally {
       els.perception.check.disabled = false;
+    }
+  });
+}
+
+// ----------------------------- agent ----------------------------- //
+
+const agentRun = {
+  missionId: null,
+  startedAt: null,
+  timer:     null,
+};
+
+function setAgentBadge(stateKey) {
+  if (!els.agent.badge) return;
+  els.agent.badge.dataset.state = stateKey;
+  const labels = {
+    idle: "idle", starting: "starting", running: "running",
+    done: "done", error: "error",
+  };
+  els.agent.badge.textContent = labels[stateKey] || stateKey;
+}
+
+function clearAgentTranscript() {
+  if (els.agent.transcript) els.agent.transcript.replaceChildren();
+  if (els.agent.finding) els.agent.finding.hidden = true;
+}
+
+function addAgentEntry(kind, body) {
+  if (!els.agent.transcript) return;
+  const li = document.createElement("li");
+  li.className = `agent-entry agent-entry-${kind}`;
+  const k = document.createElement("span");
+  k.className = "entry-kind";
+  k.textContent = kind;
+  const b = document.createElement("span");
+  b.className = "entry-body";
+  if (typeof body === "string") b.textContent = body;
+  else b.appendChild(body);
+  li.appendChild(k);
+  li.appendChild(b);
+  els.agent.transcript.appendChild(li);
+  els.agent.transcript.scrollTop = els.agent.transcript.scrollHeight;
+}
+
+function startAgentTimer() {
+  stopAgentTimer();
+  agentRun.timer = setInterval(() => {
+    if (!agentRun.startedAt) return;
+    const sec = (Date.now() - agentRun.startedAt) / 1000;
+    if (els.agent.elapsed) els.agent.elapsed.textContent = `${sec.toFixed(1)} s`;
+  }, 200);
+}
+function stopAgentTimer() {
+  if (agentRun.timer) { clearInterval(agentRun.timer); agentRun.timer = null; }
+}
+
+function renderAgentState(p) {
+  setAgentBadge(p.state);
+  if (p.mission_id && p.mission_id !== agentRun.missionId) {
+    agentRun.missionId = p.mission_id;
+    if (els.agent.missionId) els.agent.missionId.textContent = p.mission_id;
+    if (els.agent.meta) els.agent.meta.hidden = false;
+  }
+  if (p.state === "running" || p.state === "starting") {
+    if (!agentRun.startedAt) {
+      agentRun.startedAt = Date.now();
+      clearAgentTranscript();
+      startAgentTimer();
+    }
+    log("info", `agent: ${p.state}${p.trigger ? " ("+p.trigger+")" : ""}`);
+  } else if (p.state === "done") {
+    stopAgentTimer();
+    agentRun.startedAt = null;
+    log("info", `agent: done verdict=${p.verdict || "?"}`);
+  } else if (p.state === "error") {
+    stopAgentTimer();
+    agentRun.startedAt = null;
+    addAgentEntry("error", p.error || "agent error");
+    log("error", `agent error: ${p.error || ""}`);
+  }
+}
+
+function renderAgentMessage(p) {
+  addAgentEntry("thought", p.content || "");
+}
+
+function renderAgentToolCall(p) {
+  const body = document.createElement("span");
+  const name = document.createElement("strong");
+  name.textContent = p.tool;
+  body.appendChild(name);
+  const args = p.args ? JSON.stringify(p.args) : "{}";
+  body.appendChild(document.createTextNode(`(${args})`));
+  addAgentEntry("tool", body);
+}
+
+function renderAgentToolResult(p) {
+  addAgentEntry("result", p.result || "");
+}
+
+function renderAgentFinding(p) {
+  addAgentEntry("finding", `${p.verdict} — ${p.summary || ""}`);
+
+  const el = els.agent.finding;
+  if (!el) return;
+  el.hidden = false;
+  el.dataset.verdict = p.verdict;
+
+  if (els.agent.findingVerdict) {
+    els.agent.findingVerdict.dataset.verdict = p.verdict;
+    els.agent.findingVerdict.textContent     = p.verdict.replace("_", " ");
+  }
+  if (els.agent.findingMeta) {
+    els.agent.findingMeta.textContent =
+      `${p.evidence_count ?? 0} evidence frame${(p.evidence_count ?? 0) === 1 ? "" : "s"}` +
+      (p.synthesised ? " · synthesised" : "");
+  }
+  if (els.agent.findingSummary) els.agent.findingSummary.textContent = p.summary || "";
+  if (els.agent.findingReasons) {
+    els.agent.findingReasons.replaceChildren();
+    for (const r of (p.reasons || [])) {
+      const li = document.createElement("li");
+      li.textContent = r;
+      els.agent.findingReasons.appendChild(li);
+    }
+  }
+}
+
+eventHandlers["agent_state"]       = renderAgentState;
+eventHandlers["agent_message"]     = renderAgentMessage;
+eventHandlers["agent_tool_call"]   = renderAgentToolCall;
+eventHandlers["agent_tool_result"] = renderAgentToolResult;
+eventHandlers["agent_finding"]     = renderAgentFinding;
+
+if (els.agent.start) {
+  els.agent.start.addEventListener("click", async () => {
+    if (!state.connected) {
+      log("warn", "agent: connect to the drone first");
+      return;
+    }
+    els.agent.start.disabled = true;
+    try {
+      const res = await fetch("/api/agent/start?trigger=manual", { method: "POST" });
+      const data = await res.json();
+      if (data.error) log("error", `agent start: ${data.error}`);
+    } catch (err) {
+      log("error", `agent start: ${err}`);
+    } finally {
+      setTimeout(() => { els.agent.start.disabled = false; }, 2000);
     }
   });
 }

@@ -41,6 +41,12 @@ from events import bus  # noqa: E402
 from vision import analyze_frame  # noqa: E402
 from audio import monitor as audio_monitor  # noqa: E402
 from perception import OpticalFlowWatchdog, check_path_clear  # noqa: E402
+from agent import (  # noqa: E402
+    configure as agent_configure,
+    mission_state,
+    is_busy as agent_is_busy,
+    run_mission,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -65,6 +71,10 @@ perception_watchdog = OpticalFlowWatchdog(
     get_frame=drone.get_frame,
     drone_stop=drone.stop_velocity,
 )
+
+# Inject the live drone + watchdog into agent.py so its @function_tool
+# callables can drive them.
+agent_configure(drone, perception_watchdog)
 
 
 @asynccontextmanager
@@ -219,6 +229,40 @@ async def api_perception_check(direction: str = "forward") -> dict[str, Any]:
     payload = result.to_dict()
     await bus.publish({"type": "perception_check", "source": "manual", **payload})
     return payload
+
+
+# --------------------------------------------------------------------------- #
+# Agent — autonomous mission loop
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/agent/start")
+async def api_agent_start(trigger: str = "manual") -> dict[str, Any]:
+    """Kick off an autonomous mission.
+
+    Returns immediately with the initial mission state; the actual run
+    progresses on the FastAPI loop and streams events on ``/ws/events``.
+    """
+    if agent_is_busy():
+        return {"error": "agent already running", **mission_state.to_dict()}
+    # Spawn as a task — the endpoint replies right away so the operator
+    # console can render the "running" state.
+    asyncio.create_task(_run_mission_task(trigger))
+    # Give the task a tick to flip state to "starting".
+    await asyncio.sleep(0.05)
+    return mission_state.to_dict()
+
+
+@app.get("/api/agent/state")
+async def api_agent_state() -> dict[str, Any]:
+    return mission_state.to_dict()
+
+
+async def _run_mission_task(trigger: str) -> None:
+    try:
+        await run_mission(trigger)
+    except Exception as exc:
+        logger.exception("mission task crashed: %s", exc)
 
 
 # --------------------------------------------------------------------------- #

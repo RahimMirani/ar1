@@ -203,6 +203,31 @@
         <div id="audio-error" class="error-line" hidden></div>
       </section>
 
+      <section class="card agent-card">
+        <h2 class="card-title">Agent
+          <span id="agent-state-badge" class="agent-state-badge" data-state="idle">idle</span>
+        </h2>
+        <div class="row">
+          <button id="btn-agent-start" class="btn btn-primary">Activate agent</button>
+        </div>
+        <div id="agent-meta" class="agent-meta" hidden>
+          <span class="muted">mission</span>
+          <span id="agent-mission-id">—</span>
+          <span class="muted">·</span>
+          <span class="muted">elapsed</span>
+          <span id="agent-elapsed">—</span>
+        </div>
+        <ol id="agent-transcript" class="agent-transcript"></ol>
+        <div id="agent-finding" class="agent-finding" hidden>
+          <div class="agent-finding-head">
+            <span id="agent-finding-verdict" class="agent-verdict" data-verdict="unknown">—</span>
+            <span id="agent-finding-meta" class="muted"></span>
+          </div>
+          <p id="agent-finding-summary" class="agent-finding-summary"></p>
+          <ul id="agent-finding-reasons" class="agent-finding-reasons"></ul>
+        </div>
+      </section>
+
       <section class="card">
         <h2 class="card-title">Safety
           <span id="perception-state-badge" class="audio-state-badge" data-state="idle">watchdog off</span>
