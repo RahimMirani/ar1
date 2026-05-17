@@ -62,6 +62,47 @@ _last_state_packet_mono: float = 0.0  # monotonic ts of last state packet
 _video_errors_total: int = 0
 
 
+# --------------------------------------------------------------------------- #
+# Command-channel serialization
+#
+# djitellopy uses one shared response queue per drone for every "send and wait
+# for ack" command (``takeoff``, ``land``, ``flip``, ``wifi?``, etc.). If two
+# threads call ``send_command_with_return`` at overlapping times, they race
+# on that queue — the first reply that arrives is popped by whichever thread
+# checks first, regardless of which command it was actually for. Result: the
+# wifi-polling thread can swallow a ``takeoff`` ack (making takeoff time out
+# and retry, which feels like the drone "ignoring" the operator), and the
+# takeoff thread can swallow a wifi reply (leaving SNR stuck at the last
+# good value). A single module-level lock fixes both: every command that
+# expects a response is serialized, so each thread only sees the reply
+# meant for its own command.
+#
+# We do NOT lock ``send_command_without_return``, which is what RC velocity
+# uses — it never reads from the response queue, so it can't race.
+# --------------------------------------------------------------------------- #
+
+_command_send_lock = threading.Lock()
+_command_lock_patched = False
+
+
+def _patch_command_serialization() -> None:
+    global _command_lock_patched
+    if _command_lock_patched:
+        return
+
+    orig = Tello.send_command_with_return
+
+    def send_command_with_return(self, *args: Any, **kwargs: Any) -> Any:
+        with _command_send_lock:
+            return orig(self, *args, **kwargs)
+
+    Tello.send_command_with_return = send_command_with_return
+    _command_lock_patched = True
+
+
+_patch_command_serialization()
+
+
 _state_counter_patched = False
 
 
