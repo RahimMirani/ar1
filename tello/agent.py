@@ -365,6 +365,65 @@ def check_path_clear(direction: str = "forward") -> str:
 
 
 @function_tool
+def get_pose() -> str:
+    """Read the current 2D dead-reckoned pose relative to takeoff.
+
+    Returns x_m, y_m, theta_deg (heading), and a confidence flag. The
+    pose is integrated from the Tello's IMU + belly-cam optical flow,
+    so it drifts (~1 m per minute on a textured floor, more on
+    featureless surfaces). The ``confidence`` field is ``"ok"`` when
+    the integration looks healthy and ``"low"`` when the belly-cam
+    lockout detector thinks the optical flow has dropped lock — treat
+    a low-confidence pose as advisory only.
+
+    Use this to remember where you've been: if you've already
+    inspected a corner of the room, the pose tells you so."""
+    def body() -> str:
+        if _mapper is None:
+            return "ERROR: mapper not configured"
+        snap = _mapper.snapshot()
+        p = snap.pose
+        return (
+            f"pose: x={p['x_m']:+.2f} m, y={p['y_m']:+.2f} m, "
+            f"heading={p['theta_deg']:+.0f} deg "
+            f"(confidence={snap.pose_confidence})"
+        )
+    return _tool("get_pose", {})(body)
+
+
+@function_tool
+def get_map_summary() -> str:
+    """Summarise the 2D map the drone has built so far.
+
+    Returns aggregate counts (how many trajectory points logged, how
+    many cells flagged as obstacles), the bounding box of observed
+    obstacles, and the current pose. Useful before deciding a verdict:
+    if you've only logged a handful of trajectory points the room
+    hasn't actually been patrolled and you should keep moving."""
+    def body() -> str:
+        if _mapper is None:
+            return "ERROR: mapper not configured"
+        snap = _mapper.snapshot()
+        p = snap.pose
+        xmin, ymin, xmax, ymax = snap.bounds_m
+        if snap.occupied_cells > 0:
+            extent = (
+                f"obstacles span x=[{xmin:+.2f}, {xmax:+.2f}] m, "
+                f"y=[{ymin:+.2f}, {ymax:+.2f}] m"
+            )
+        else:
+            extent = "no obstacles stamped yet"
+        return (
+            f"map: pose=({p['x_m']:+.2f}, {p['y_m']:+.2f}) m, "
+            f"heading={p['theta_deg']:+.0f} deg, "
+            f"trajectory={len(snap.trajectory)} pts, "
+            f"obstacle_cells={snap.occupied_cells}, "
+            f"confidence={snap.pose_confidence}; {extent}"
+        )
+    return _tool("get_map_summary", {})(body)
+
+
+@function_tool
 def report_finding(verdict: str, summary: str, reasons: list[str]) -> str:
     """Submit the agent's final verdict. TERMINAL — call exactly once.
 
@@ -488,6 +547,21 @@ Direction reference:
   * `up` / `down` — always available, but altitude changes do not
     fulfil the "visit distinct positions" requirement.
 
+Spatial memory tools (use these to actually patrol, not loiter):
+
+  * `get_pose()` — returns the drone's 2D position (x_m, y_m) relative
+    to where it took off, plus heading in degrees. Drift accumulates
+    (~30-60 cm/min on textured floor) so treat it as approximate, but
+    it is more than good enough to answer "have I been near here
+    before?". A ``confidence=low`` reading means the optical-flow
+    sensor has lost lock and the position is suspect — keep flying
+    but don't trust the exact numbers until it recovers.
+  * `get_map_summary()` — aggregate view: trajectory point count,
+    obstacle cell count, and the bounding box of observed obstacles.
+    Useful before `report_finding` to sanity-check coverage: if your
+    trajectory has fewer than ~30 points you have not actually moved
+    enough.
+
 Decision rules:
 
   * real_fire   — *two or more* `analyze_view` results agree on
@@ -539,6 +613,8 @@ def _build_agent() -> Agent:
             move,
             analyze_view,
             check_path_clear,
+            get_pose,
+            get_map_summary,
             report_finding,
         ],
     )
