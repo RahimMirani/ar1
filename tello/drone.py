@@ -1007,6 +1007,20 @@ class Drone:
 
     def _read_telemetry(self) -> dict[str, Any]:
         t = self._tello
+        # ``get_acceleration_*`` come from the Tello's IMU and are reported in
+        # *thousandths of g* (milli-g) body-frame. The mapping layer treats
+        # them as a complementary signal to ``speed_*`` so it can spot moments
+        # when the belly-cam optical flow has dropped lock (velocity reads
+        # near zero while the IMU still sees the drone accelerating). Some
+        # firmware revisions can momentarily fail to publish accel; the
+        # ``getattr`` fallback keeps the snapshot serialisable rather than
+        # raising into the telemetry thread.
+        try:
+            agx = t.get_acceleration_x()
+            agy = t.get_acceleration_y()
+            agz = t.get_acceleration_z()
+        except Exception:
+            agx = agy = agz = None
         return {
             "battery_pct": t.get_battery(),
             "height_cm": t.get_height(),
@@ -1020,4 +1034,7 @@ class Drone:
             "speed_x": t.get_speed_x(),
             "speed_y": t.get_speed_y(),
             "speed_z": t.get_speed_z(),
+            "accel_x_mg": agx,
+            "accel_y_mg": agy,
+            "accel_z_mg": agz,
         }
