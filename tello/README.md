@@ -59,18 +59,22 @@ uv run python scripts/smoke_video.py       # OpenCV window with live feed
 
 ### Controls
 
-| Key              | Action                          |
-| ---------------- | ------------------------------- |
-| `T`              | Takeoff                         |
-| `L`              | Land                            |
-| `Esc`            | **EMERGENCY** (cuts motors)     |
-| `W` / `S`        | Forward / back (30 cm)          |
-| `A` / `D`        | Left / right (30 cm)            |
-| `Space` / `Ctrl` | Up / down (30 cm)               |
-| `Q` / `E`        | Yaw left / right (30°)          |
-| `1` / `2` / `3` / `4` | Flip forward / back / left / right |
+Live motion is **hold-to-fly**: press and hold a key to fly continuously in
+that direction, release to stop. Hold combinations work naturally
+(e.g. `↑ + →` flies diagonally forward-right).
 
-On-screen buttons mirror every keyboard action.
+| Key                       | Action                              |
+| ------------------------- | ----------------------------------- |
+| `T`                       | Takeoff                             |
+| `L`                       | Land                                |
+| `Esc`                     | **EMERGENCY** (cuts motors)         |
+| `↑` / `↓`                 | Forward / back (hold)               |
+| `←` / `→`                 | Left / right (hold)                 |
+| `Space` / `Shift`         | Up / down (hold)                    |
+| `Q` / `E`                 | Yaw left / right (hold)             |
+| `1` / `2` / `3` / `4`     | Flip forward / back / left / right  |
+
+On-screen motion buttons mirror the keyboard with click-and-hold.
 
 ### Safety
 

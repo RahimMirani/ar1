@@ -32,13 +32,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from drone import (
-    DEFAULT_STEP_CM,
-    DEFAULT_YAW_DEG,
-    Drone,
-    VALID_FLIP_DIRECTIONS,
-    VALID_MOVE_DIRECTIONS,
-)
+from drone import Drone, VALID_FLIP_DIRECTIONS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -198,7 +192,12 @@ async def ws_telemetry(websocket: WebSocket) -> None:
 
 
 async def _execute_command(cmd: dict[str, Any]) -> dict[str, Any]:
-    """Dispatch a single control message in a worker thread."""
+    """Dispatch a single control message in a worker thread.
+
+    Live motion is done via ``set_velocity``: the dashboard streams updates
+    whenever the user's held-key combination changes, and the drone's RC
+    background thread keeps forwarding the vector at 20 Hz.
+    """
 
     action = cmd.get("action")
 
@@ -211,18 +210,16 @@ async def _execute_command(cmd: dict[str, Any]) -> dict[str, Any]:
         await asyncio.to_thread(drone.land)
     elif action == "emergency":
         await asyncio.to_thread(drone.emergency)
-    elif action == "move":
-        direction = cmd.get("direction", "")
-        distance = int(cmd.get("distance_cm", DEFAULT_STEP_CM))
-        if direction not in VALID_MOVE_DIRECTIONS:
-            return {"ok": False, "error": f"bad direction: {direction!r}"}
-        await asyncio.to_thread(drone.move, direction, distance)
-    elif action == "rotate":
-        direction = cmd.get("direction", "")
-        degrees = int(cmd.get("degrees", DEFAULT_YAW_DEG))
-        if direction not in {"cw", "ccw"}:
-            return {"ok": False, "error": f"bad rotation: {direction!r}"}
-        await asyncio.to_thread(drone.rotate, direction, degrees)
+    elif action == "set_velocity":
+        lr  = int(cmd.get("lr", 0))
+        fb  = int(cmd.get("fb", 0))
+        ud  = int(cmd.get("ud", 0))
+        yaw = int(cmd.get("yaw", 0))
+        await asyncio.to_thread(drone.set_velocity, lr, fb, ud, yaw)
+        # Quiet response — these arrive at high rate; do not spam the log.
+        return {"ok": True, "action": "set_velocity", "silent": True}
+    elif action == "stop_velocity":
+        await asyncio.to_thread(drone.stop_velocity)
     elif action == "flip":
         direction = cmd.get("direction", "")
         if direction not in VALID_FLIP_DIRECTIONS:

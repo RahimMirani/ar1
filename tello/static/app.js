@@ -7,6 +7,10 @@
  *                    cuts the motors. So we auto-reconnect, but the operator
  *                    has to manually take off again.
  *
+ * Live motion uses an RC velocity model: the user holds keys (arrows / Space /
+ * Shift / Q / E) and we send a `set_velocity` command whenever the resulting
+ * vector changes. The drone reacts within ~50 ms.
+ *
  * Video is just <img src="/video.mjpg"> — the browser handles MJPEG natively.
  */
 
@@ -81,7 +85,6 @@ els.clearLog.addEventListener("click", () => {
 // --------------------------- video plumbing --------------------------- //
 
 function startVideo() {
-  // Cache-bust the MJPEG URL so reconnects re-establish the stream cleanly.
   els.video.src = `/video.mjpg?t=${Date.now()}`;
   els.video.onload = () => els.videoOverlay.classList.add("hidden");
   els.video.onerror = () => els.videoOverlay.classList.remove("hidden");
@@ -119,7 +122,6 @@ function handleTelemetry(snap) {
   state.streaming = !!snap.streaming;
   state.flying    = !!snap.flying;
 
-  // Badges
   setBadge(els.conn,   snap.connected ? "good" : "gray",
                        snap.connected ? "connected" : "disconnected");
   setBadge(els.stream, snap.streaming ? "good" : "gray",
@@ -127,7 +129,6 @@ function handleTelemetry(snap) {
   setBadge(els.fly,    snap.flying ? "good" : "gray",
                        snap.flying ? "in air" : "grounded");
 
-  // Telemetry numbers
   const t = snap.telemetry || {};
   setNum(els.t.battery, t.battery_pct);
   setNum(els.t.tof,     t.tof_cm);
@@ -141,7 +142,6 @@ function handleTelemetry(snap) {
   setNum(els.t.sz,      t.speed_z);
   setNum(els.t.temp,    t.temperature_c);
 
-  // Battery warning color
   if (typeof t.battery_pct === "number" && t.battery_pct > 0 && t.battery_pct < 15) {
     els.t.battery.classList.add("low-batt");
     setBadge(els.conn, "bad", `battery ${t.battery_pct}%`);
@@ -149,10 +149,8 @@ function handleTelemetry(snap) {
     els.t.battery.classList.remove("low-batt");
   }
 
-  // Status line
   els.status.textContent = snap.last_status || "—";
 
-  // Error banner
   if (snap.last_error) {
     els.lastError.hidden = false;
     els.lastError.textContent = snap.last_error;
@@ -160,11 +158,9 @@ function handleTelemetry(snap) {
     els.lastError.hidden = true;
   }
 
-  // Side-effect: kick the video on/off
   if (state.streaming && !els.video.src) startVideo();
   if (!state.streaming && els.video.src) stopVideo();
 
-  // Side-effect: log flight transitions
   if (!wasFlying && state.flying) log("info", "drone is now in air");
   if (wasFlying && !state.flying) log("info", "drone has landed / motors stopped");
 }
@@ -196,19 +192,18 @@ function connectControlWs() {
 
   ws.onopen = () => {
     log("info", "control channel open");
-    // heartbeat so we know the WS round-trip works
     sendCommand({ action: "ping" });
   };
   ws.onclose = () => {
     log("warn", "control channel closed, reconnecting...");
     state.controlWs = null;
+    clearHeldKeys();
     setTimeout(connectControlWs, 1000);
   };
   ws.onerror = () => ws.close();
   ws.onmessage = (ev) => {
     try {
-      const payload = JSON.parse(ev.data);
-      handleControlResponse(payload);
+      handleControlResponse(JSON.parse(ev.data));
     } catch (err) {
       log("error", `bad control payload: ${err}`);
     }
@@ -220,6 +215,7 @@ function handleControlResponse(p) {
     log("error", p.error || "command failed");
     return;
   }
+  if (p.silent) return;
   if (p.action && p.action !== "ping") {
     log("cmd", `${p.action} -> ${p.status || "ok"}`);
   }
@@ -228,10 +224,72 @@ function handleControlResponse(p) {
 function sendCommand(cmd) {
   const ws = state.controlWs;
   if (!ws || ws.readyState !== WebSocket.OPEN) {
-    log("warn", `control channel not ready, dropped: ${cmd.action}`);
+    if (cmd.action !== "set_velocity") {
+      log("warn", `control channel not ready, dropped: ${cmd.action}`);
+    }
     return;
   }
   ws.send(JSON.stringify(cmd));
+}
+
+// -------------------- velocity (RC) state machine -------------------- //
+//
+// We track which "hold keys" are currently active (either real keyboard keys
+// or synthetic ones from on-screen button mousedown/touchstart). Whenever the
+// set changes, we recompute the resulting velocity vector and send it.
+
+const VELOCITY = {
+  LR:  60,   // ± left / right
+  FB:  60,   // ± back / forward
+  UD:  50,   // ± down / up
+  YAW: 70,   // ± yaw left / right
+};
+
+const HOLD_KEYS = new Set([
+  "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+  "Space", "ShiftLeft", "ShiftRight",
+  "KeyQ", "KeyE",
+]);
+
+const heldKeys = new Set();
+let   lastSentVel = { lr: 0, fb: 0, ud: 0, yaw: 0 };
+
+function recomputeVelocity() {
+  let lr = 0, fb = 0, ud = 0, yaw = 0;
+
+  if (heldKeys.has("ArrowUp"))    fb += VELOCITY.FB;
+  if (heldKeys.has("ArrowDown"))  fb -= VELOCITY.FB;
+  if (heldKeys.has("ArrowRight")) lr += VELOCITY.LR;
+  if (heldKeys.has("ArrowLeft"))  lr -= VELOCITY.LR;
+  if (heldKeys.has("Space"))      ud += VELOCITY.UD;
+  if (heldKeys.has("ShiftLeft") || heldKeys.has("ShiftRight")) ud -= VELOCITY.UD;
+  if (heldKeys.has("KeyE"))       yaw += VELOCITY.YAW;
+  if (heldKeys.has("KeyQ"))       yaw -= VELOCITY.YAW;
+
+  if (lr === lastSentVel.lr && fb === lastSentVel.fb &&
+      ud === lastSentVel.ud && yaw === lastSentVel.yaw) {
+    return;
+  }
+  lastSentVel = { lr, fb, ud, yaw };
+  sendCommand({ action: "set_velocity", lr, fb, ud, yaw });
+}
+
+function holdKeyDown(code) {
+  if (!HOLD_KEYS.has(code) || heldKeys.has(code)) return;
+  heldKeys.add(code);
+  recomputeVelocity();
+}
+
+function holdKeyUp(code) {
+  if (!heldKeys.has(code)) return;
+  heldKeys.delete(code);
+  recomputeVelocity();
+}
+
+function clearHeldKeys() {
+  if (heldKeys.size === 0) return;
+  heldKeys.clear();
+  recomputeVelocity();
 }
 
 // ------------------------- button wiring ----------------------------- //
@@ -263,55 +321,76 @@ els.disconnect.addEventListener("click", async () => {
 
 els.emergency.addEventListener("click", () => {
   log("error", "EMERGENCY — cutting motors");
+  clearHeldKeys();
   sendCommand({ action: "emergency" });
 });
 
-// Wire every [data-action] button automatically.
+// Discrete one-shot actions (takeoff, land, flips).
 document.querySelectorAll("[data-action]").forEach((btn) => {
   btn.addEventListener("click", () => {
-    sendCommand(btnToCommand(btn));
+    const cmd = { action: btn.dataset.action };
+    if (btn.dataset.direction) cmd.direction = btn.dataset.direction;
+    sendCommand(cmd);
   });
 });
 
-function btnToCommand(btn) {
-  const action = btn.dataset.action;
-  const direction = btn.dataset.direction;
-  const cmd = { action };
-  if (direction) cmd.direction = direction;
-  return cmd;
-}
+// Hold-to-fly on-screen buttons. mousedown / touchstart synthesize a held
+// key; mouseup / mouseleave / touchend release it. We use pointer events so
+// the same handler works for mouse, touch, and pen.
+document.querySelectorAll("[data-hold-key]").forEach((btn) => {
+  const code = btn.dataset.holdKey;
+  const press   = (e) => { e.preventDefault(); btn.setPointerCapture?.(e.pointerId); holdKeyDown(code); };
+  const release = (e) => { e.preventDefault(); btn.releasePointerCapture?.(e.pointerId); holdKeyUp(code); };
+  btn.addEventListener("pointerdown",   press);
+  btn.addEventListener("pointerup",     release);
+  btn.addEventListener("pointercancel", release);
+  btn.addEventListener("pointerleave",  (e) => { if (heldKeys.has(code)) holdKeyUp(code); });
+});
 
 // -------------------------- keyboard --------------------------------- //
 
-const KEYMAP = {
-  KeyT:        { action: "takeoff" },
-  KeyL:        { action: "land" },
-  Escape:      { action: "emergency" },
-  KeyW:        { action: "move",   direction: "forward" },
-  KeyS:        { action: "move",   direction: "back" },
-  KeyA:        { action: "move",   direction: "left" },
-  KeyD:        { action: "move",   direction: "right" },
-  Space:       { action: "move",   direction: "up" },
-  ControlLeft: { action: "move",   direction: "down" },
-  ControlRight:{ action: "move",   direction: "down" },
-  KeyQ:        { action: "rotate", direction: "ccw" },
-  KeyE:        { action: "rotate", direction: "cw" },
-  Digit1:      { action: "flip",   direction: "f" },
-  Digit2:      { action: "flip",   direction: "b" },
-  Digit3:      { action: "flip",   direction: "l" },
-  Digit4:      { action: "flip",   direction: "r" },
+// One-shot actions only fire on keydown (not repeat).
+const ONE_SHOT_KEYS = {
+  KeyT:   { action: "takeoff" },
+  KeyL:   { action: "land" },
+  Escape: { action: "emergency" },
+  Digit1: { action: "flip", direction: "f" },
+  Digit2: { action: "flip", direction: "b" },
+  Digit3: { action: "flip", direction: "l" },
+  Digit4: { action: "flip", direction: "r" },
 };
 
 window.addEventListener("keydown", (e) => {
-  if (e.repeat) return;
-  // Ignore if user is typing in a form field.
   const tag = (e.target && e.target.tagName) || "";
   if (tag === "INPUT" || tag === "TEXTAREA") return;
 
-  const cmd = KEYMAP[e.code];
-  if (!cmd) return;
-  e.preventDefault();
-  sendCommand(cmd);
+  if (HOLD_KEYS.has(e.code)) {
+    e.preventDefault();
+    if (e.repeat) return;
+    holdKeyDown(e.code);
+    return;
+  }
+
+  const oneShot = ONE_SHOT_KEYS[e.code];
+  if (oneShot && !e.repeat) {
+    e.preventDefault();
+    if (oneShot.action === "emergency") clearHeldKeys();
+    sendCommand(oneShot);
+  }
+});
+
+window.addEventListener("keyup", (e) => {
+  if (HOLD_KEYS.has(e.code)) {
+    e.preventDefault();
+    holdKeyUp(e.code);
+  }
+});
+
+// Safety: if the browser tab loses focus or visibility, release everything
+// so the drone stops instead of flying away unattended.
+window.addEventListener("blur", clearHeldKeys);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearHeldKeys();
 });
 
 // ----------------------------- boot ---------------------------------- //
