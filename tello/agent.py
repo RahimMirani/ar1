@@ -47,7 +47,12 @@ from perception import check_path_clear as perception_check
 
 logger = logging.getLogger("tello.agent")
 
-DEFAULT_MODEL = os.getenv("FIREDRONE_AGENT_MODEL", "gpt-4o")
+# Plain module-level constants. The agent model is what does the
+# reasoning + tool-calling for the autonomous mission; gpt-4o is the
+# best trade-off of tool-call reliability and latency we have. Mission
+# budget and max-turns are tuned together (~5-6 s per turn worst case
+# leaves headroom inside the 90 s cap).
+AGENT_MODEL = "gpt-4o"
 MISSION_BUDGET_SEC = float(os.getenv("FIREDRONE_AGENT_BUDGET_SEC", "90"))
 MAX_TURNS = int(os.getenv("FIREDRONE_AGENT_MAX_TURNS", "16"))
 
@@ -399,7 +404,7 @@ def _build_agent() -> Agent:
     return Agent(
         name="FireDroneAgent",
         instructions=SYSTEM_PROMPT,
-        model=DEFAULT_MODEL,
+        model=AGENT_MODEL,
         tools=[
             takeoff,
             land,

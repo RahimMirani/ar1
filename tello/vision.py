@@ -2,9 +2,11 @@
 
 The dashboard's "Analyze current view" button and the agent's
 ``analyze_view`` tool both go through :func:`analyze_frame`. We use
-``gpt-4o-mini`` by default with a structured Pydantic response so the
-agent can reason over a predictable schema without parsing free-form
-prose. Override via the ``FIREDRONE_VISION_MODEL`` env var.
+``gpt-4o-mini`` — a strong-enough multimodal model that runs in well
+under a second per frame on the network paths we've tested, at ~1/10th
+the cost of full ``gpt-4o``. The agent reasons over a Pydantic
+``FireDetection`` schema rather than free-form prose so the verdict is
+deterministic-shape downstream.
 
 The thumbnail returned in :class:`VisionResult` is the *exact* JPEG we
 sent to the model — that lets the operator console and the dispatcher
@@ -16,7 +18,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import os
 import time
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -27,7 +28,10 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger("tello.vision")
 
-DEFAULT_MODEL = os.getenv("FIREDRONE_VISION_MODEL", "gpt-4o-mini")
+# Plain module-level constant. Vision quality vs cost vs latency was the
+# trade-off we tuned for; if you want to A/B another model, change it
+# here and re-run smoke_vision.py.
+VISION_MODEL = "gpt-4o-mini"
 JPEG_QUALITY = 75
 
 
@@ -118,7 +122,7 @@ def encode_jpeg_b64(frame_bgr) -> str:
 def analyze_frame(
     frame_bgr,
     *,
-    model: str = DEFAULT_MODEL,
+    model: str = VISION_MODEL,
     prompt: str | None = None,
 ) -> VisionResult:
     """Analyze a BGR frame and return a structured fire/smoke verdict.
