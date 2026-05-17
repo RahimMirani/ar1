@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -43,6 +44,60 @@ from djitellopy import Tello
 from djitellopy.tello import BackgroundFrameRead, TelloException
 
 logger = logging.getLogger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Module-level link-health counters
+#
+# Counters are incremented from threads owned by djitellopy (state UDP
+# receiver, video decoder) so they live at module scope behind a single lock.
+# The `Drone` instance samples them periodically to compute packet loss and
+# video-decode error rates. There is one Tello per process in this project so
+# globals are fine; if that ever changes we'd key by drone address.
+# --------------------------------------------------------------------------- #
+
+_link_counters_lock = threading.Lock()
+_state_packets_total: int = 0
+_last_state_packet_mono: float = 0.0  # monotonic ts of last state packet
+_video_errors_total: int = 0
+
+
+_state_counter_patched = False
+
+
+def _patch_state_packet_counter() -> None:
+    """Monkey-patch ``Tello.parse_state`` to count incoming state packets.
+
+    The Tello broadcasts state at ~10 Hz on UDP 8890; djitellopy's static
+    ``udp_state_receiver`` thread calls ``parse_state`` once per packet. By
+    wrapping ``parse_state`` we get a free packet counter without touching
+    the receiver thread, and the rate it reports is a direct measure of how
+    many state datagrams are surviving the WiFi link.
+    """
+
+    global _state_counter_patched
+    if _state_counter_patched:
+        return
+
+    orig = Tello.parse_state
+
+    def parse_state(state: str):
+        result = orig(state)
+        # ``parse_state`` returns ``{}`` for the literal "ok" handshake reply
+        # that some firmware versions echo onto the state channel. Only count
+        # real telemetry packets (non-empty dicts).
+        if result:
+            global _state_packets_total, _last_state_packet_mono
+            with _link_counters_lock:
+                _state_packets_total += 1
+                _last_state_packet_mono = time.monotonic()
+        return result
+
+    Tello.parse_state = staticmethod(parse_state)
+    _state_counter_patched = True
+
+
+_patch_state_packet_counter()
 
 
 # --------------------------------------------------------------------------- #
@@ -89,7 +144,10 @@ if getattr(_av.open, "__name__", "") != "_patched_av_open":
 def _patch_resilient_video_decode() -> None:
     """djitellopy's frame loop uses ``container.decode()``; a single bad H.264
     packet kills the worker thread. Demux packet-by-packet and skip corrupt
-    NAL units so the feed recovers."""
+    NAL units so the feed recovers. Each skipped (corrupt) frame is counted
+    in ``_video_errors_total`` — the rate of these is a sensitive proxy for
+    a degrading WiFi link, often visible before the command channel breaks.
+    """
 
     def update_frame(self) -> None:
         try:
@@ -104,6 +162,9 @@ def _patch_resilient_video_decode() -> None:
                         else:
                             self.frame = np.array(frame.to_image())
                 except _av.error.InvalidDataError:
+                    global _video_errors_total
+                    with _link_counters_lock:
+                        _video_errors_total += 1
                     continue
         except _av.error.ExitError:
             raise TelloException(
@@ -199,6 +260,18 @@ class Drone:
 
         self._telemetry_thread: Optional[threading.Thread] = None
         self._rc_thread: Optional[threading.Thread] = None
+        self._wifi_thread: Optional[threading.Thread] = None
+
+        # Link-health state — populated by the wifi/telemetry loops, sampled
+        # by ``_compute_link()`` for the dashboard.
+        self._link_lock = threading.Lock()
+        self._link_snr_db: Optional[int] = None      # last successful wifi? value
+        self._link_snr_ts: float = 0.0               # monotonic ts of the read
+        self._link_rtt_ms: Optional[float] = None    # round-trip time of wifi?
+        # Sliding-window history of (mono_ts, state_packets_total,
+        # video_errors_total). Sampled at 2 Hz; ~5 sec window is enough to
+        # smooth out the noise without lagging operator perception.
+        self._link_history: deque[tuple[float, int, int]] = deque(maxlen=10)
 
     # ------------------------------------------------------------------ #
     # Context manager
@@ -427,10 +500,19 @@ class Drone:
             )
             self._rc_thread.start()
 
+        if self._wifi_thread is None or not self._wifi_thread.is_alive():
+            self._wifi_thread = threading.Thread(
+                target=self._wifi_loop,
+                name="tello-wifi",
+                daemon=True,
+            )
+            self._wifi_thread.start()
+
     def _telemetry_loop(self) -> None:
         # djitellopy reads telemetry from a state UDP packet the drone
         # broadcasts ~10 Hz. The `get_*` accessors read from that cache and
-        # do NOT send commands, so polling is cheap.
+        # do NOT send commands, so polling is cheap. Link-health metrics
+        # (packet loss, video errors, SNR, RTT) are merged in on top.
         while not self._closed:
             time.sleep(0.2)  # 5 Hz
             try:
@@ -438,8 +520,98 @@ class Drone:
             except Exception as exc:
                 logger.debug("telemetry read failed: %s", exc)
                 continue
+            link = self._compute_link()
             with self._lock:
-                self._last_telemetry = tele
+                self._last_telemetry = {**tele, **link}
+
+    def _wifi_loop(self) -> None:
+        # Poll the SDK ``wifi?`` command at 1 Hz. Each poll yields both the
+        # WiFi SNR in dB and the round-trip latency of a command response,
+        # which together are the cleanest "is the link still healthy"
+        # signal the original Tello exposes.
+        while not self._closed:
+            time.sleep(1.0)
+            if not self._connected:
+                continue
+            try:
+                t0 = time.monotonic()
+                raw = self._tello.query_wifi_signal_noise_ratio()
+                rtt_ms = (time.monotonic() - t0) * 1000.0
+                # Response is usually a bare integer like "90"; some
+                # firmware revisions append "\r\n" or a unit. Be permissive.
+                snr_str = "".join(c for c in str(raw) if c.isdigit() or c == "-")
+                snr_db = int(snr_str) if snr_str else None
+            except Exception as exc:
+                logger.debug("wifi? query failed: %s", exc)
+                # Don't clear the last value — let the staleness check in
+                # ``_compute_link`` decide whether to ignore it. RTT we do
+                # bump, so the dashboard reflects that the channel stalled.
+                with self._link_lock:
+                    self._link_rtt_ms = None
+                continue
+            with self._link_lock:
+                self._link_snr_db = snr_db
+                self._link_snr_ts = time.monotonic()
+                self._link_rtt_ms = rtt_ms
+
+    def _compute_link(self) -> dict[str, Any]:
+        """Snapshot the link-health counters and compute the rates the
+        dashboard cares about: packet loss %, video errors / sec, age of
+        the last state packet, plus the most recent SNR + RTT readings.
+        """
+
+        now = time.monotonic()
+        with _link_counters_lock:
+            packets_total = _state_packets_total
+            video_errors_total = _video_errors_total
+            last_state_ts = _last_state_packet_mono
+
+        self._link_history.append((now, packets_total, video_errors_total))
+
+        packet_loss_pct: Optional[float] = None
+        video_errors_per_sec: Optional[float] = None
+        if len(self._link_history) >= 2:
+            t0, p0, v0 = self._link_history[0]
+            dt = now - t0
+            if dt > 0:
+                # Tello broadcasts state at ~10 Hz; missed packets translate
+                # directly into observed rate < 10/s.
+                pkt_rate = (packets_total - p0) / dt
+                packet_loss_pct = max(0.0, min(100.0, (10.0 - pkt_rate) * 10.0))
+                video_errors_per_sec = max(0.0, (video_errors_total - v0) / dt)
+
+        ms_since_state = (
+            (now - last_state_ts) * 1000.0 if last_state_ts > 0 else None
+        )
+
+        with self._link_lock:
+            snr_db = self._link_snr_db
+            snr_ts = self._link_snr_ts
+            rtt_ms = self._link_rtt_ms
+
+        # A stale SNR reading (no successful wifi? in the last 5 s) is more
+        # misleading than no reading at all — the link is likely down. Drop
+        # it so the dashboard / fence don't reason off a number that's no
+        # longer true.
+        snr_age_ms = (now - snr_ts) * 1000.0 if snr_ts > 0 else None
+        if snr_age_ms is not None and snr_age_ms > 5000:
+            snr_db = None
+
+        return {
+            "wifi_snr_db": snr_db,
+            "link_rtt_ms": round(rtt_ms, 1) if rtt_ms is not None else None,
+            "packet_loss_pct": (
+                round(packet_loss_pct, 1) if packet_loss_pct is not None else None
+            ),
+            "video_errors_per_sec": (
+                round(video_errors_per_sec, 1)
+                if video_errors_per_sec is not None
+                else None
+            ),
+            "ms_since_state": (
+                round(ms_since_state) if ms_since_state is not None else None
+            ),
+        }
 
     def _rc_loop(self) -> None:
         # Continuously forward the current velocity vector to the drone while
