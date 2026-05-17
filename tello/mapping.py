@@ -164,6 +164,10 @@ TRAJECTORY_MAX = 6000
 # layout in the operator console feels consistent.
 RENDER_W = 480
 RENDER_H = 480
+# Display viewport. The grid still stores a 10 m room-scale canvas, but the
+# operator map renders a zoomed 3 m window centred on the drone so 40-70 cm
+# exploration steps are visually obvious instead of tiny.
+RENDER_VIEW_EXTENT_M = 3.0
 JPEG_QUALITY = 75
 
 
@@ -598,7 +602,7 @@ class Mapper:
         # frame into three vertical bins (left / centre / right) and
         # stamp per-bin, which gives a richer map than a single yes/no.
         h, w = inv.shape
-        norm = (inv - inv.min()) / (inv.ptp() + 1e-6)
+        norm = (inv - inv.min()) / (np.ptp(inv) + 1e-6)
         band = norm[h // 4 : 3 * h // 4, :]
 
         with self._state_lock:
@@ -718,24 +722,53 @@ class Mapper:
         """
         canvas = np.zeros((RENDER_H, RENDER_W, 3), dtype=np.uint8)
 
-        # Pixel-per-metre — both axes use the same scale because the
-        # grid is square and the render is square.
-        ppm = RENDER_W / GRID_EXTENT_M
+        with self._state_lock:
+            pose_x = self._pose_x_m
+            pose_y = self._pose_y_m
+            pose_t = self._pose_theta_rad
+            pose_conf = self._pose_confidence
+            traj = list(self._trajectory)
+
+        # Pixel-per-metre — render a zoomed viewport centred on the drone,
+        # while the stored occupancy grid remains room-scale.
+        ppm = RENDER_W / RENDER_VIEW_EXTENT_M
         cx_px = RENDER_W // 2
         cy_px = RENDER_H // 2
+        view_x0 = pose_x - RENDER_VIEW_EXTENT_M / 2.0
+        view_y0 = pose_y - RENDER_VIEW_EXTENT_M / 2.0
 
-        # 1 m grid lines.
+        def world_to_px(x_m: float, y_m: float) -> tuple[int, int]:
+            return (
+                int((x_m - view_x0) * ppm),
+                int((y_m - view_y0) * ppm),
+            )
+
+        # 25 cm grid lines, with 1 m lines slightly brighter. This matches
+        # the close-quarters scale bar and makes small patrol steps legible.
         grid_color = (28, 28, 32)
-        for i in range(-int(GRID_EXTENT_M / 2), int(GRID_EXTENT_M / 2) + 1):
-            x = int(cx_px + i * ppm)
-            y = int(cy_px + i * ppm)
-            cv2.line(canvas, (x, 0), (x, RENDER_H), grid_color, 1)
-            cv2.line(canvas, (0, y), (RENDER_W, y), grid_color, 1)
+        major_grid_color = (42, 42, 48)
+        first_x = math.floor(view_x0 / 0.25) * 0.25
+        first_y = math.floor(view_y0 / 0.25) * 0.25
+        x_m = first_x
+        while x_m <= view_x0 + RENDER_VIEW_EXTENT_M + 1e-6:
+            x, _ = world_to_px(x_m, pose_y)
+            color = major_grid_color if abs((x_m / 1.0) - round(x_m / 1.0)) < 1e-6 else grid_color
+            cv2.line(canvas, (x, 0), (x, RENDER_H), color, 1)
+            x_m += 0.25
+        y_m = first_y
+        while y_m <= view_y0 + RENDER_VIEW_EXTENT_M + 1e-6:
+            _, y = world_to_px(pose_x, y_m)
+            color = major_grid_color if abs((y_m / 1.0) - round(y_m / 1.0)) < 1e-6 else grid_color
+            cv2.line(canvas, (0, y), (RENDER_W, y), color, 1)
+            y_m += 0.25
 
-        # Bigger axis cross at origin.
+        # Origin cross, only if the takeoff point is in view.
         axis_color = (48, 48, 54)
-        cv2.line(canvas, (cx_px, 0), (cx_px, RENDER_H), axis_color, 1)
-        cv2.line(canvas, (0, cy_px), (RENDER_W, cy_px), axis_color, 1)
+        ox, oy = world_to_px(0.0, 0.0)
+        if 0 <= ox < RENDER_W:
+            cv2.line(canvas, (ox, 0), (ox, RENDER_H), axis_color, 1)
+        if 0 <= oy < RENDER_H:
+            cv2.line(canvas, (0, oy), (RENDER_W, oy), axis_color, 1)
 
         # Free + occupied cells. We resize the grid to render dims with
         # nearest-neighbour so cell boundaries stay crisp.
@@ -763,38 +796,43 @@ class Mapper:
         layer[occ_mask, 1] = g
         layer[occ_mask, 2] = r
 
-        # Upsample and OR onto the canvas where the layer has content.
-        layer_up = cv2.resize(
-            layer, (RENDER_W, RENDER_H), interpolation=cv2.INTER_NEAREST,
-        )
+        # Crop the room-scale grid to the zoomed viewport, then upsample.
+        gx0 = int((view_x0 / CELL_SIZE_M) + GRID_CELLS // 2)
+        gy0 = int((view_y0 / CELL_SIZE_M) + GRID_CELLS // 2)
+        cells_in_view = max(1, int(RENDER_VIEW_EXTENT_M / CELL_SIZE_M))
+        crop = np.zeros((cells_in_view, cells_in_view, 3), dtype=np.uint8)
+        src_x0 = max(0, gx0)
+        src_y0 = max(0, gy0)
+        src_x1 = min(GRID_CELLS, gx0 + cells_in_view)
+        src_y1 = min(GRID_CELLS, gy0 + cells_in_view)
+        dst_x0 = src_x0 - gx0
+        dst_y0 = src_y0 - gy0
+        if src_x1 > src_x0 and src_y1 > src_y0:
+            crop[
+                dst_y0 : dst_y0 + (src_y1 - src_y0),
+                dst_x0 : dst_x0 + (src_x1 - src_x0),
+            ] = layer[src_y0:src_y1, src_x0:src_x1]
+        layer_up = cv2.resize(crop, (RENDER_W, RENDER_H), interpolation=cv2.INTER_NEAREST)
         layer_has = layer_up.any(axis=2)
         canvas[layer_has] = layer_up[layer_has]
 
         # Trajectory polyline.
-        with self._state_lock:
-            pose_x = self._pose_x_m
-            pose_y = self._pose_y_m
-            pose_t = self._pose_theta_rad
-            pose_conf = self._pose_confidence
-            traj = list(self._trajectory)
-
         if len(traj) >= 2:
             pts = []
             for (x_m, y_m, _conf) in traj:
-                px = int(cx_px + x_m * ppm)
-                py = int(cy_px + y_m * ppm)
+                px, py = world_to_px(x_m, y_m)
                 pts.append((px, py))
             # White line, slightly thicker so it pops over the cells.
             pts_arr = np.array(pts, dtype=np.int32).reshape(-1, 1, 2)
             cv2.polylines(canvas, [pts_arr], False, (235, 235, 235), 2, cv2.LINE_AA)
 
         # Origin marker (subtle cross).
-        cv2.drawMarker(canvas, (cx_px, cy_px), (150, 150, 150),
-                       cv2.MARKER_CROSS, 12, 1, cv2.LINE_AA)
+        if 0 <= ox < RENDER_W and 0 <= oy < RENDER_H:
+            cv2.drawMarker(canvas, (ox, oy), (150, 150, 150),
+                           cv2.MARKER_CROSS, 12, 1, cv2.LINE_AA)
 
         # Pose arrow — amber. Smaller / dim when confidence is low.
-        px = int(cx_px + pose_x * ppm)
-        py = int(cy_px + pose_y * ppm)
+        px, py = world_to_px(pose_x, pose_y)
         size = 14 if pose_conf == "ok" else 10
         color = (10, 160, 235) if pose_conf == "ok" else (40, 110, 160)
         nose_x = int(px + size * math.cos(pose_t))
@@ -822,8 +860,10 @@ class Mapper:
             _draw_text(canvas, "FLOW LOCKOUT — pose drift suspected",
                        (12, RENDER_H - 14), 0.45, 1, color=(60, 60, 235))
 
-        # Scale bar: 1 m in the bottom-right corner.
-        bar_len = int(1.0 * ppm)
+        # Scale bar: 25 cm in the bottom-right corner. The map is used
+        # for close indoor navigation, so a quarter-metre reference
+        # matches the obstacle-avoidance scale better than 1 m.
+        bar_len = int(0.25 * ppm)
         bar_x = RENDER_W - bar_len - 20
         bar_y = RENDER_H - 20
         cv2.line(canvas, (bar_x, bar_y), (bar_x + bar_len, bar_y),
@@ -832,7 +872,7 @@ class Mapper:
                  (200, 200, 200), 1, cv2.LINE_AA)
         cv2.line(canvas, (bar_x + bar_len, bar_y - 4),
                  (bar_x + bar_len, bar_y + 4), (200, 200, 200), 1, cv2.LINE_AA)
-        _draw_text(canvas, "1 m", (bar_x + bar_len // 2 - 10, bar_y - 8),
+        _draw_text(canvas, "25 cm", (bar_x + bar_len // 2 - 18, bar_y - 8),
                    0.4, 1, faint=True)
 
         return canvas

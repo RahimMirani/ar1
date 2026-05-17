@@ -40,63 +40,82 @@
   <main class="layout">
     <section class="card video-card">
       <header class="card-head">
-        <span class="card-title">Live feed</span>
+        <span class="card-title">Live feed + location</span>
         <span id="video-tag" class="card-tag">offline</span>
       </header>
-      <div class="video-frame">
-        <img id="video" alt="Tello live feed" />
-        <div id="video-overlay" class="video-overlay">
-          <div class="video-overlay-text">Standby</div>
+      <div class="dispatch-visual-grid">
+        <div class="video-frame">
+          <img id="video" alt="Tello live feed" />
+          <div id="video-overlay" class="video-overlay">
+            <div class="video-overlay-text">Standby</div>
+          </div>
+
+          <div class="hud-strip">
+            <div class="hud-meter" title="Battery">
+              <div class="ring" id="battery-ring">
+                <svg viewBox="0 0 38 38">
+                  <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
+                  <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+                </svg>
+                <span class="pct" id="battery-pct">—</span>
+              </div>
+              <div class="meter-label">
+                <span class="lbl">battery</span>
+                <span class="val"><span id="hud-battery">—</span>%</span>
+              </div>
+            </div>
+
+            <div class="hud-meter" title="Flight time vs 90 s cap">
+              <div class="ring" id="flight-ring">
+                <svg viewBox="0 0 38 38">
+                  <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
+                  <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+                </svg>
+                <span class="pct" id="flight-pct">0</span>
+              </div>
+              <div class="meter-label">
+                <span class="lbl">flight / 90 s</span>
+                <span class="val"><span id="hud-flight">0.0</span>s</span>
+              </div>
+            </div>
+
+            <div class="hud-meter" title="Altitude">
+              <div class="alt-bar"><div class="fill" id="alt-fill"></div></div>
+              <div class="meter-label">
+                <span class="lbl">alt</span>
+                <span class="val"><span id="hud-altitude">—</span>cm</span>
+              </div>
+            </div>
+
+            <div class="hud-audio" id="hud-audio">
+              <span class="lbl">3 kHz band</span>
+              <div class="bar">
+                <div class="fill" id="audio-fill"></div>
+                <div class="threshold" id="audio-threshold"></div>
+              </div>
+              <span class="val"><span id="hud-audio-band">—</span></span>
+            </div>
+          </div>
         </div>
 
-        <div class="hud-strip">
-          <div class="hud-meter" title="Battery">
-            <div class="ring" id="battery-ring">
-              <svg viewBox="0 0 38 38">
-                <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
-                <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-dasharray="97.4" stroke-dashoffset="97.4" />
-              </svg>
-              <span class="pct" id="battery-pct">—</span>
+        <div class="station-map" aria-label="Incident location map">
+          <iframe
+            title="Map showing South Park Commons at 380 Brannan Street"
+            loading="lazy"
+            referrerpolicy="no-referrer-when-downgrade"
+            src="https://www.openstreetmap.org/export/embed.html?bbox=-122.3995%2C37.7767%2C-122.3905%2C37.7835&amp;layer=mapnik&amp;marker=37.7810%2C-122.3942">
+          </iframe>
+          <div class="station-map-drop" aria-hidden="true"></div>
+          <div class="station-map-pin">
+            <span class="pin-dot"></span>
+            <div>
+              <strong>South Park Commons</strong>
+              <span>380 Brannan St, San Francisco</span>
             </div>
-            <div class="meter-label">
-              <span class="lbl">battery</span>
-              <span class="val"><span id="hud-battery">—</span>%</span>
-            </div>
-          </div>
-
-          <div class="hud-meter" title="Flight time vs 90 s cap">
-            <div class="ring" id="flight-ring">
-              <svg viewBox="0 0 38 38">
-                <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
-                <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-dasharray="97.4" stroke-dashoffset="97.4" />
-              </svg>
-              <span class="pct" id="flight-pct">0</span>
-            </div>
-            <div class="meter-label">
-              <span class="lbl">flight / 90 s</span>
-              <span class="val"><span id="hud-flight">0.0</span>s</span>
-            </div>
-          </div>
-
-          <div class="hud-meter" title="Altitude">
-            <div class="alt-bar"><div class="fill" id="alt-fill"></div></div>
-            <div class="meter-label">
-              <span class="lbl">alt</span>
-              <span class="val"><span id="hud-altitude">—</span>cm</span>
-            </div>
-          </div>
-
-          <div class="hud-audio" id="hud-audio">
-            <span class="lbl">3 kHz band</span>
-            <div class="bar">
-              <div class="fill" id="audio-fill"></div>
-              <div class="threshold" id="audio-threshold"></div>
-            </div>
-            <span class="val"><span id="hud-audio-band">—</span></span>
           </div>
         </div>
       </div>
@@ -137,11 +156,11 @@
 
   <section class="card evidence-card">
     <header class="card-head">
-      <span class="card-title">Evidence frames</span>
+      <span class="card-title">Evidence report</span>
       <span id="evidence-count" class="card-tag">0</span>
     </header>
     <div id="evidence-gallery" class="evidence-gallery">
-      <div class="evidence-empty">Evidence frames the agent captures will appear here in order.</div>
+      <div class="evidence-empty">Evidence reports the agent captures will appear here in order.</div>
     </div>
   </section>
 

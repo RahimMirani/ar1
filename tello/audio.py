@@ -231,7 +231,11 @@ class AudioMonitor:
         )
         return self.status()
 
-    def simulate_alarm(self, duration_sec: float = 4.0) -> dict[str, Any]:
+    def simulate_alarm(
+        self,
+        duration_sec: float = 4.0,
+        publish: bool = True,
+    ) -> dict[str, Any]:
         """Manually fire an alarm event for ``duration_sec``.
 
         Lets you exercise the agent's auto-trigger without a real smoke
@@ -240,15 +244,16 @@ class AudioMonitor:
         """
         until = time.time() + max(0.5, duration_sec)
         self._simulate_until = until
-        bus.publish_threadsafe(
-            {
-                "type": "audio_alarm",
-                "state": "alarm",
-                "source": "manual",
-                "until": until,
-                "reason": "operator pressed Simulate alarm",
-            }
-        )
+        if publish:
+            bus.publish_threadsafe(
+                {
+                    "type": "audio_alarm",
+                    "state": "alarm",
+                    "source": "manual",
+                    "until": until,
+                    "reason": "operator pressed Simulate alarm",
+                }
+            )
         return {"ok": True, "until": until, "duration_sec": duration_sec}
 
     # --- worker -------------------------------------------------------- #

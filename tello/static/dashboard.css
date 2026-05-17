@@ -55,7 +55,7 @@
   /* fixed-height chrome — keeps the dashboard locked to one viewport */
   --h-topbar:   54px;
   --h-banner:   82px;
-  --h-evidence: 184px;
+  --h-evidence: 260px;
 }
 
 * { box-sizing: border-box; }
@@ -292,9 +292,16 @@ body {
 
 /* ============================ video card ============================ */
 
+.dispatch-visual-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
 .video-frame {
   position: relative;
-  flex: 1;
   min-height: 0;
   background: #000;
   border-radius: var(--radius-sm);
@@ -312,6 +319,97 @@ body {
   transition: opacity 200ms ease;
 }
 .video-overlay.hidden { opacity: 0; pointer-events: none; }
+
+.station-map {
+  position: relative;
+  min-height: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.10), transparent 42%),
+    var(--bg-elev);
+}
+.station-map iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  filter: grayscale(0.88) invert(0.88) hue-rotate(180deg) saturate(0.72) brightness(0.74) contrast(1.12);
+  opacity: 0.94;
+}
+.station-map::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(245, 158, 11, 0.08), transparent 38%),
+    radial-gradient(circle at 52% 48%, transparent 0 36%, rgba(0, 0, 0, 0.18) 76%, rgba(0, 0, 0, 0.48) 100%);
+}
+.station-map-drop {
+  position: absolute;
+  left: 58%;
+  top: 46%;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  transform: translate(-50%, -100%) rotate(45deg);
+  border-radius: 50% 50% 50% 4px;
+  background: var(--bad);
+  box-shadow:
+    0 0 0 6px rgba(220, 38, 38, 0.20),
+    0 0 24px rgba(220, 38, 38, 0.70),
+    0 12px 22px rgba(0, 0, 0, 0.45);
+}
+.station-map-drop::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border-radius: 50%;
+  background: #fff;
+  opacity: 0.9;
+}
+.station-map-pin {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: rgba(10, 10, 12, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+.station-map-pin .pin-dot {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 50%;
+  background: var(--bad);
+  box-shadow:
+    0 0 0 4px rgba(220, 38, 38, 0.22),
+    0 0 18px rgba(220, 38, 38, 0.55);
+}
+.station-map-pin strong {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.1;
+}
+.station-map-pin span {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.2;
+}
 
 /* HUD strip — sits at bottom of the video frame */
 .hud-strip {
@@ -661,14 +759,15 @@ body {
 
 .evidence-gallery {
   display: flex;
+  flex-direction: column;
   gap: 10px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 4px 2px 6px 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 4px 6px 6px 2px;
   flex: 1;
   min-height: 0;
 }
-.evidence-gallery::-webkit-scrollbar { height: 4px; }
+.evidence-gallery::-webkit-scrollbar { width: 4px; }
 .evidence-gallery::-webkit-scrollbar-track { background: transparent; }
 .evidence-gallery::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
 
@@ -680,18 +779,19 @@ body {
 }
 
 .evidence-tile {
-  flex: 0 0 198px;
+  flex: 0 0 auto;
   background: var(--bg-elev);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   position: relative;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 .evidence-tile .sev-bar {
-  height: 3px;
+  width: 4px;
+  flex: 0 0 4px;
   background: var(--text-dim);
 }
 .evidence-tile[data-severity="low"]    .sev-bar { background: var(--good); }
@@ -699,8 +799,9 @@ body {
 .evidence-tile[data-severity="high"]   .sev-bar { background: var(--bad); }
 
 .evidence-tile img {
-  width: 100%;
-  height: 92px;
+  width: 220px;
+  min-height: 132px;
+  max-height: 160px;
   object-fit: cover;
   display: block;
   background: #000;
@@ -713,7 +814,7 @@ body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .evidence-tile-head {
@@ -757,14 +858,33 @@ body {
 .evidence-flag.on     { color: var(--accent); border-color: var(--accent-line); background: var(--accent-dim); }
 .evidence-flag.on-red { color: var(--bad);    border-color: var(--bad-line);    background: var(--bad-soft); }
 
-.evidence-desc {
+.evidence-conf {
+  font-size: 10.5px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.evidence-desc {
+  color: var(--text);
+  font-size: 13px;
   line-height: 1.4;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+}
+
+.evidence-reasons {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.evidence-reasons li { margin: 1px 0; }
+
+.evidence-meta {
+  margin-top: auto;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ============================ responsive ============================ */
@@ -789,6 +909,7 @@ body {
       "mission";
     grid-template-rows: 1fr 1fr;
   }
+  .dispatch-visual-grid { grid-template-columns: 1fr; }
   .incident-title { font-size: 15px; }
   .incident-banner { grid-template-columns: auto 1fr auto; }
   .incident-dispatch { display: none; }

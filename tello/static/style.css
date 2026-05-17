@@ -316,13 +316,16 @@ body {
   min-width: 0;
 }
 .video-pane[data-depth="off"] > .video-frame {
-  flex: 1 1 100%;
+  flex: 1 1 65%;
 }
-.video-pane > .depth-frame {
+.video-pane > .sensor-stack {
   flex: 0 0 40%;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-.video-pane[data-depth="off"] > .depth-frame {
+.video-pane[data-depth="off"] .depth-frame {
   display: none;
 }
 
@@ -371,11 +374,172 @@ body {
 }
 .video-overlay.hidden { opacity: 0; }
 
+.path-hud {
+  --path-strength: 0.28;
+  position: absolute;
+  left: 50%;
+  bottom: 1.5%;
+  width: min(64%, 560px);
+  height: 52%;
+  transform: translateX(-50%);
+  z-index: 3;
+  pointer-events: none;
+  opacity: 0.58;
+  filter:
+    drop-shadow(0 4px 16px rgba(0, 0, 0, 0.76))
+    drop-shadow(0 0 10px rgba(245, 158, 11, 0.10));
+  transition: opacity 160ms ease, filter 220ms ease;
+}
+.path-hud.active {
+  opacity: 0.92;
+  filter:
+    drop-shadow(0 4px 18px rgba(0, 0, 0, 0.78))
+    drop-shadow(0 0 16px rgba(245, 158, 11, 0.28));
+}
+.path-hud.autonomous {
+  opacity: 0.95;
+  filter:
+    drop-shadow(0 5px 20px rgba(0, 0, 0, 0.82))
+    drop-shadow(0 0 22px rgba(245, 158, 11, 0.36));
+}
+.path-hud[data-reverse="true"] {
+  opacity: 0.56;
+}
+.path-hud.blocked {
+  filter:
+    drop-shadow(0 5px 20px rgba(0, 0, 0, 0.82))
+    drop-shadow(0 0 18px rgba(220, 38, 38, 0.42));
+}
+.path-hud-glow {
+  fill: rgba(245, 158, 11, calc(var(--path-strength) * 0.34));
+  stroke: none;
+  filter: blur(1.2px);
+}
+.path-hud-fill {
+  fill: url("#path-road-gradient");
+  fill-opacity: calc(var(--path-strength) + 0.18);
+  stroke: rgba(245, 158, 11, 0.30);
+  stroke-width: 0.25;
+}
+.path-hud-rail {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.88);
+  stroke-width: 1.05;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.path-hud-rail-left,
+.path-hud-rail-right {
+  animation: path-rail-pulse 1.8s ease-in-out infinite;
+}
+.path-hud-center {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.42);
+  stroke-width: 0.55;
+  stroke-dasharray: 2.6 4.2;
+  stroke-linecap: round;
+}
+.path-hud-flow {
+  fill: none;
+  stroke: rgba(251, 191, 36, 0.88);
+  stroke-width: 0.9;
+  stroke-dasharray: 3.2 7.4;
+  stroke-linecap: round;
+  animation: path-flow 0.9s linear infinite;
+  opacity: 0;
+}
+.path-hud.active .path-hud-flow,
+.path-hud.autonomous .path-hud-flow {
+  opacity: 0.9;
+}
+.path-hud[data-reverse="true"] .path-hud-flow {
+  animation-direction: reverse;
+}
+.path-hud.blocked .path-hud-fill {
+  fill: rgba(220, 38, 38, 0.28);
+  stroke: rgba(220, 38, 38, 0.65);
+}
+.path-hud.blocked .path-hud-rail,
+.path-hud.blocked .path-hud-flow,
+.path-hud.blocked .path-hud-target {
+  stroke: rgba(248, 113, 113, 0.94);
+}
+.path-hud.checking .path-hud-flow {
+  animation-duration: 1.8s;
+  opacity: 0.72;
+}
+.path-hud-horizon {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.50);
+  stroke-width: 0.45;
+  stroke-linecap: round;
+}
+.path-hud-target {
+  stroke: rgba(255, 255, 255, 0.82);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  animation: path-target-breathe 1.4s ease-in-out infinite;
+}
+
+.path-hud-readout {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  padding: 5px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 999px;
+  background: rgba(10, 10, 12, 0.52);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.34);
+}
+.path-hud-mode {
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+.path-hud-action {
+  color: var(--text);
+}
+.path-hud-readout.autonomous .path-hud-mode {
+  color: var(--accent-soft);
+}
+.path-hud-readout.blocked .path-hud-mode,
+.path-hud-readout.blocked .path-hud-action {
+  color: var(--bad);
+}
+
+@keyframes path-flow {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: -21.2; }
+}
+
+@keyframes path-rail-pulse {
+  0%, 100% { stroke-opacity: 0.72; }
+  50%      { stroke-opacity: 1; }
+}
+
+@keyframes path-target-breathe {
+  0%, 100% { stroke-opacity: 0.48; }
+  50%      { stroke-opacity: 1; }
+}
+
 /* ============================ depth view ============================ */
 
 .depth-frame {
   position: relative;
-  height: 100%;
+  flex: 1 1 50%;
+  min-height: 0;
   background: #000;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -958,6 +1122,55 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.vision-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.vision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.vision-list-empty {
+  padding: 10px 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.vision-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.vision-card[data-severity="medium"] { border-color: rgba(245, 158, 11, 0.35); }
+.vision-card[data-severity="high"]   { border-color: rgba(220, 38, 38, 0.55); }
+
+.vision-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.vision-card .vision-thumb {
+  max-height: 150px;
+}
+
 /* ----- audio ----- */
 
 .audio-state-badge {
@@ -1045,12 +1258,12 @@ body {
 
 .map-frame {
   position: relative;
-  margin-top: 10px;
   width: 100%;
-  aspect-ratio: 1 / 1;
+  flex: 1 1 50%;
+  min-height: 0;
   background: #000;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   overflow: hidden;
   display: flex;
   align-items: center;

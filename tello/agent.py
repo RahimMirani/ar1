@@ -257,15 +257,15 @@ def move(direction: str, distance_cm: int) -> str:
     a depth check first and refuses if the path is blocked.
 
     direction: 'forward' | 'back' | 'left' | 'right' | 'up' | 'down'.
-    distance_cm: 20-200 — bigger steps cover the room faster; pick
-    100-200 for roaming, 20-60 for fine inspection."""
+    distance_cm: 20-80 — slow indoor exploration. Pick 40-70 for
+    normal patrol, 20-40 for tight spaces."""
     def body() -> str:
         if _drone is None:
             return "ERROR: drone not configured"
         d = direction.strip().lower()
         if d not in {"forward", "back", "left", "right", "up", "down"}:
             return f"ERROR: bad direction {direction!r}"
-        cm = max(20, min(200, int(distance_cm)))
+        cm = max(20, min(80, int(distance_cm)))
 
         # Floor guard: refuse "down" when we're already close to the
         # ground. tof_cm is the downward time-of-flight reading on the
@@ -297,13 +297,87 @@ def move(direction: str, distance_cm: int) -> str:
                 if check.available and not check.clear:
                     return (
                         f"REFUSED: depth check says {d} is blocked "
-                        f"(obstacle ratio {check.obstacle_ratio:.0%}). "
+                        f"(obstacle ratio {check.obstacle_ratio:.0%}, "
+                        f"center ~{check.estimated_center_distance_m} m, "
+                        f"{check.distance_band}). "
                         "Try rotating, or use `move(\"back\", ...)` to "
                         "back away — back never needs a depth check."
                     )
+                if d == "forward" and check.available and check.estimated_center_distance_m is not None:
+                    safe_cm = int(max(0, (check.estimated_center_distance_m - 0.45) * 100))
+                    if safe_cm < 20:
+                        return (
+                            "REFUSED: center-frame object is too close for a "
+                            f"forward step (~{check.estimated_center_distance_m} m). "
+                            "Rotate or back away before moving forward."
+                        )
+                    cm = min(cm, safe_cm, 70)
         _drone.move(d, cm)
         return f"OK - moved {d} {cm} cm."
     return _tool("move", {"direction": direction, "distance_cm": distance_cm})(body)
+
+
+@function_tool
+def explore_step(preferred_direction: str = "forward", max_step_cm: int = 60) -> str:
+    """Take one slow autonomous exploration step.
+
+    This is the preferred movement primitive during autonomous mode: it checks
+    the requested path, keeps a center-object buffer, moves only a short indoor
+    step, and returns pose/map context for the next decision.
+
+    preferred_direction: 'forward' | 'left' | 'right' | 'back'.
+    max_step_cm: 30-70. Use 50-60 for normal exploration."""
+    def body() -> str:
+        if _drone is None:
+            return "ERROR: drone not configured"
+        direction = preferred_direction.strip().lower()
+        if direction not in {"forward", "left", "right", "back"}:
+            return f"ERROR: bad preferred_direction {preferred_direction!r}"
+        cm = max(30, min(70, int(max_step_cm)))
+
+        if direction in {"forward", "left", "right"}:
+            frame = _drone.get_frame()
+            if frame is None:
+                return "ERROR: no frame available for path check"
+            check = perception_check(frame, direction=direction)
+            bus.publish_threadsafe(
+                {"type": "perception_check", "source": "explore_step",
+                 "mission_id": mission_state.mission_id, **check.to_dict()}
+            )
+            if check.available and not check.clear:
+                return (
+                    f"REFUSED: {direction} blocked; center "
+                    f"~{check.estimated_center_distance_m} m "
+                    f"({check.distance_band}), obstacle ratio "
+                    f"{check.obstacle_ratio:.0%}. Rotate 45-90 deg and "
+                    "try explore_step again."
+                )
+            if direction == "forward" and check.available and check.estimated_center_distance_m is not None:
+                safe_cm = int(max(0, (check.estimated_center_distance_m - 0.50) * 100))
+                if safe_cm < 30:
+                    return (
+                        f"REFUSED: center object too close "
+                        f"(~{check.estimated_center_distance_m} m). "
+                        "Rotate or back away before moving."
+                    )
+                cm = min(cm, safe_cm)
+
+        _drone.move(direction, cm)
+        pose = ""
+        if _mapper is not None:
+            snap = _mapper.snapshot()
+            p = snap.pose
+            pose = (
+                f" pose=({p['x_m']:+.2f}, {p['y_m']:+.2f}) m, "
+                f"heading={p['theta_deg']:+.0f} deg, "
+                f"confidence={snap.pose_confidence}, "
+                f"trajectory={len(snap.trajectory)} pts."
+            )
+        return f"OK - explored {direction} {cm} cm.{pose}"
+    return _tool(
+        "explore_step",
+        {"preferred_direction": preferred_direction, "max_step_cm": max_step_cm},
+    )(body)
 
 
 @function_tool
@@ -344,7 +418,7 @@ def analyze_view(prompt: str = "") -> str:
 
 @function_tool
 def check_path_clear(direction: str = "forward") -> str:
-    """Run an on-demand MiDaS depth check in the given direction.
+    """Run an on-demand center-frame closeness / path-clear check.
 
     direction: 'forward' | 'left' | 'right' | 'up' | 'down'."""
     def body() -> str:
@@ -360,7 +434,11 @@ def check_path_clear(direction: str = "forward") -> str:
         )
         if not check.available:
             return "WARN: MiDaS unavailable - proceed with caution."
-        return f"{check.reason} (latency {check.latency_ms} ms)"
+        return (
+            f"{check.reason}; center_closeness={check.center_closeness:.2f}, "
+            f"distance_band={check.distance_band} "
+            f"(latency {check.latency_ms} ms)"
+        )
     return _tool("check_path_clear", {"direction": direction})(body)
 
 
@@ -487,11 +565,12 @@ investigating an alarm. The drone is a DJI Tello operating indoors in a home or
 small office.
 
 Treat this like an actual search, not a stationary check: don't just rotate
-where you are — *go look*. Your operational radius is about 5 metres from the
-takeoff point. Visit **at least four distinct positions** in the space and
-inspect each from 2-3 angles before submitting a verdict. The point of the
-mission is to confidently say "I checked everywhere reasonable and saw X" —
-that's only credible if you actually moved through the room.
+where you are — *go look*. Move slowly and deliberately. Your operational
+radius is about 5 metres from the takeoff point, but each translation should
+be a cautious 40-70 cm step. Visit **at least four distinct positions** in the
+space and inspect each from 2-3 angles before submitting a verdict. The point
+of the mission is to confidently say "I checked everywhere reasonable and saw
+X" — that's only credible if you actually moved through the room.
 
 Mission shape (a template — adapt to what the space looks like):
 
@@ -503,33 +582,31 @@ Mission shape (a template — adapt to what the space looks like):
      comes back fire_visible=true with confidence >= 0.6, fast-track to
      report — do one corroborating capture from a different angle, then land
      and report real_fire.
-  3. **Patrol outward.** Pick a direction (start with what the camera sees).
-     Call `check_path_clear("forward")` — if clear, `move("forward", 150-200)`.
-     Otherwise rotate 45-90 deg and try again. At the new position call
-     `analyze_view()`. Then `rotate(90)` and analyze again to cover the side
-     you couldn't see from the previous spot.
+  3. **Patrol outward.** Use `explore_step("forward", 50-60)` as your main
+     motion primitive. It performs the path check, keeps a center-object
+     buffer, and takes exactly one slow step. If it returns REFUSED, rotate
+     45-90 deg and call `explore_step("forward", 50)` again. At each new
+     position call `analyze_view()`. Then `rotate(60-90)` and analyze again
+     to cover the side you couldn't see from the previous spot.
   4. **Visit at least three more distinct positions.** Good shapes:
-       * Diamond: forward 180 -> rotate 90 -> forward 150 -> rotate 90 ->
-                  forward 180 -> rotate 90 -> forward 150 (back near start).
-       * Hallway sweep: forward 200, analyze, forward 200, analyze, rotate
-                        180, forward 200, analyze, forward 200, analyze.
-       * Wide arc: forward 150, rotate 45, forward 150, rotate 45,
-                   forward 150 — fans out across the open space.
-     Always `check_path_clear` before a forward step. If REFUSED, treat it
-     as useful information — that direction has a wall or obstacle. Pick
-     another. **Do not give up on lateral motion** — covering ground IS the
-     mission. If a `move("forward", ...)` call is REFUSED, your next move
-     should be either `rotate(90)` and re-check, or `move("back", 100-150)`
-     to retreat into clear space, or `move("left", ...)` / `move("right",
-     ...)`. **Vertical motion is not exploration** — `move("up"/"down", ...)`
-     does not count toward your distinct-position requirement.
+       * Diamond: explore_step forward 60 -> rotate 90 -> explore_step
+                  forward 60 -> rotate 90 -> explore_step forward 60.
+       * Hallway sweep: explore_step forward 60, analyze, explore_step
+                        forward 60, analyze, rotate 180, repeat.
+       * Wide arc: explore_step forward 50, rotate 45, explore_step forward
+                   50, rotate 45, explore_step forward 50.
+     If REFUSED, treat it as useful information — that direction has a wall
+     or obstacle. Pick another. **Do not give up on lateral motion** —
+     covering ground IS the mission. Your next move should be either
+     `rotate(45 or 90)` and `explore_step("forward", 50)`, or
+     `explore_step("back", 40)` to retreat into clear space. **Vertical
+     motion is not exploration** — `move("up"/"down", ...)` does not count
+     toward your distinct-position requirement.
 
      In a typical empty home or office, the depth check will return CLEAR
-     for forward most of the time. That is your *green light* to push
-     forward with confidence, not a hint to stop early. Open rooms and
-     hallways should get long forward moves (180-200 cm), not 60 cm hops.
-     Save the small steps for tight spots where you're inspecting a
-     specific area.
+     for forward most of the time. That is your *green light* to take the
+     next slow step, not a hint to stop early. Keep moving in 40-70 cm steps
+     until you have several distinct viewpoints.
   5. **Return**: rotate roughly back toward your start so the operator's
      orientation makes sense, then `land()`.
   6. Call `report_finding(verdict, summary, reasons)` exactly once. The
@@ -540,8 +617,11 @@ Mission shape (a template — adapt to what the space looks like):
 
 Direction reference:
 
-  * `forward` / `left` / `right` — go through the MiDaS depth check.
-    May be REFUSED if the path is blocked.
+  * `forward` / `left` / `right` — go through the depth/closeness check.
+    May be REFUSED if the path is blocked. Forward movement is also capped
+    by the estimated center-frame distance so it keeps a buffer from objects.
+  * `explore_step()` — preferred for autonomous exploration. Use it instead
+    of raw `move("forward", ...)` unless you have a very specific reason.
   * `back` — always available. Use this to retreat from a refused
     forward, or to back up for a wider view before analyze.
   * `up` / `down` — always available, but altitude changes do not
@@ -581,8 +661,12 @@ Decision rules:
 Hard rules:
 
   * NEVER call `move("forward", ...)` without first calling
-    `check_path_clear("forward")`. If it refuses, do not retry forward in
-    the same orientation — rotate, then re-check, then move.
+    `check_path_clear("forward")`. If it refuses, or reports distance_band
+    near/very_near, do not retry forward in the same orientation — rotate,
+    then re-check, then move.
+  * Prefer `explore_step("forward", 50-60)` over manually pairing
+    `check_path_clear` + `move`. The operator UI shows your explore intent
+    on the path overlay, so every autonomous movement should be visible.
   * If `move("down", ...)` is REFUSED for low altitude, do not retry going
     down — you're already near the floor. Stay level or go up.
   * If any tool returns `ERROR:` or `REFUSED:`, adapt instead of repeating
@@ -611,6 +695,7 @@ def _build_agent() -> Agent:
             hover,
             rotate,
             move,
+            explore_step,
             analyze_view,
             check_path_clear,
             get_pose,

@@ -70,6 +70,8 @@ const state = {
   audioLastDb: 0,
 };
 
+const renderedEvidenceKeys = new Set();
+
 // ------------------------ constants ------------------------ //
 
 /* 2 * pi * r where r=15.5 in the SVG (matches HTML markup). */
@@ -159,8 +161,9 @@ function clearEvidence() {
   els.evidence.gallery.replaceChildren();
   const empty = document.createElement("div");
   empty.className = "evidence-empty";
-  empty.textContent = "Evidence frames the agent captures will appear here in order.";
+  empty.textContent = "Evidence reports the agent captures will appear here in order.";
   els.evidence.gallery.appendChild(empty);
+  renderedEvidenceKeys.clear();
   state.evidence = 0;
   els.evidence.count.textContent       = "0";
   els.mission.evidenceCnt.textContent  = "0";
@@ -403,13 +406,7 @@ handlers["agent_tool_result"] = (p) => {
 
 handlers["vision_result"] = (p) => {
   if (p.source !== "agent") return;
-  const empty = els.evidence.gallery.querySelector(".evidence-empty");
-  if (empty) empty.remove();
-  els.evidence.gallery.appendChild(buildEvidenceTile(p));
-  state.evidence += 1;
-  els.evidence.count.textContent       = String(state.evidence);
-  els.mission.evidenceCnt.textContent  = String(state.evidence);
-  els.evidence.gallery.scrollLeft = els.evidence.gallery.scrollWidth;
+  renderEvidence(p);
 };
 
 handlers["incident"] = (p) => {
@@ -440,6 +437,9 @@ handlers["incident"] = (p) => {
   setStatus(v, p.title || v);
   setMissionStep(p.summary || p.title || "Mission complete");
   markStepperVerdict(v);
+  if (Array.isArray(p.evidence) && p.evidence.length) {
+    renderEvidenceList(p.evidence);
+  }
 
   // Verdict reasoning gets a colored block at the top of the feed —
   // the headline payoff moment of the dashboard. Remove any previous
@@ -475,6 +475,32 @@ handlers["perception_alert"] = (p) => {
 };
 
 // ------------------------ helpers ------------------------ //
+
+function evidenceKey(p) {
+  return [
+    p.source || "agent",
+    p.description || "",
+    p.thumbnail_b64 ? p.thumbnail_b64.slice(0, 80) : "",
+  ].join("|");
+}
+
+function renderEvidence(p) {
+  const key = evidenceKey(p);
+  if (renderedEvidenceKeys.has(key)) return;
+  renderedEvidenceKeys.add(key);
+  const empty = els.evidence.gallery.querySelector(".evidence-empty");
+  if (empty) empty.remove();
+  els.evidence.gallery.appendChild(buildEvidenceTile(p));
+  state.evidence = renderedEvidenceKeys.size;
+  els.evidence.count.textContent       = String(state.evidence);
+  els.mission.evidenceCnt.textContent  = String(state.evidence);
+  els.evidence.gallery.scrollTop = els.evidence.gallery.scrollHeight;
+}
+
+function renderEvidenceList(items) {
+  clearEvidence();
+  for (const item of items) renderEvidence({ source: "agent", ...item });
+}
 
 function buildEvidenceTile(p) {
   const tile = document.createElement("div");
@@ -516,13 +542,20 @@ function buildEvidenceTile(p) {
 
   const flags = document.createElement("span");
   flags.className = "evidence-flags";
-  if (p.fire_visible) {
-    const f = document.createElement("span"); f.className = "evidence-flag on-red"; f.textContent = "fire"; flags.appendChild(f);
-  }
-  if (p.smoke_visible) {
-    const s = document.createElement("span"); s.className = "evidence-flag on"; s.textContent = "smoke"; flags.appendChild(s);
-  }
+  const addFlag = (label, on, red) => {
+    const f = document.createElement("span");
+    f.className = "evidence-flag" + (on ? (red ? " on-red" : " on") : "");
+    f.textContent = label;
+    flags.appendChild(f);
+  };
+  addFlag("fire", !!p.fire_visible, true);
+  addFlag("smoke", !!p.smoke_visible, false);
   head.appendChild(flags);
+
+  const conf = document.createElement("span");
+  conf.className = "evidence-conf";
+  conf.textContent = `${Math.round((p.confidence || 0) * 100)}% conf`;
+  head.appendChild(conf);
 
   body.appendChild(head);
 
@@ -530,6 +563,20 @@ function buildEvidenceTile(p) {
   desc.className = "evidence-desc";
   desc.textContent = p.description || "";
   body.appendChild(desc);
+
+  const reasons = document.createElement("ul");
+  reasons.className = "evidence-reasons";
+  for (const r of (p.reasons || [])) {
+    const li = document.createElement("li");
+    li.textContent = r;
+    reasons.appendChild(li);
+  }
+  body.appendChild(reasons);
+
+  const meta = document.createElement("div");
+  meta.className = "evidence-meta";
+  meta.textContent = `${p.model || "?"} · ${p.source || "agent"} · ${p.latency_ms ?? "?"} ms`;
+  body.appendChild(meta);
 
   tile.appendChild(body);
   return tile;

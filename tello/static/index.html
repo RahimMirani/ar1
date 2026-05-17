@@ -106,19 +106,54 @@
           <div id="hud-fence" class="hud-fence">link ok</div>
         </div>
 
+        <svg id="path-hud" class="path-hud" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="path-road-gradient" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stop-color="#fbbf24" stop-opacity="0.46" />
+              <stop offset="58%" stop-color="#f59e0b" stop-opacity="0.20" />
+              <stop offset="100%" stop-color="#ffffff" stop-opacity="0.02" />
+            </linearGradient>
+          </defs>
+          <path id="path-hud-glow" class="path-hud-glow" d="M34 98 C39 78 44 62 48 48 L52 48 C56 62 61 78 66 98 Z" />
+          <path id="path-hud-fill" class="path-hud-fill" d="M36 98 C40 78 45 62 48 48 L52 48 C55 62 60 78 64 98 Z" />
+          <path id="path-hud-left" class="path-hud-rail path-hud-rail-left" d="M36 98 C40 78 45 62 48 48" />
+          <path id="path-hud-right" class="path-hud-rail path-hud-rail-right" d="M64 98 C60 78 55 62 52 48" />
+          <path id="path-hud-center" class="path-hud-center" d="M50 98 C50 78 50 62 50 48" />
+          <path id="path-hud-flow" class="path-hud-flow" d="M50 98 C50 78 50 62 50 48" />
+          <path id="path-hud-horizon" class="path-hud-horizon" d="M42 50 Q50 47 58 50" />
+          <line id="path-hud-target" class="path-hud-target" x1="44" y1="54" x2="56" y2="54" />
+        </svg>
+        <div id="path-hud-readout" class="path-hud-readout" aria-hidden="true">
+          <span id="path-hud-mode" class="path-hud-mode">manual</span>
+          <span id="path-hud-action" class="path-hud-action">hover</span>
+        </div>
+
         <div id="video-overlay" class="video-overlay">
           <div class="video-overlay-text">Standby — click connect</div>
         </div>
       </div>
 
-      <div id="depth-pane" class="depth-frame">
-        <img id="depth-feed" alt="MiDaS depth visualisation" />
-        <div class="depth-label">
-          <span class="depth-label-title">Depth · MiDaS small</span>
-          <span class="depth-label-sub">red = near · blue = far</span>
+      <div class="sensor-stack">
+        <div id="depth-pane" class="depth-frame">
+          <img id="depth-feed" alt="MiDaS depth visualisation" />
+          <div class="depth-label">
+            <span class="depth-label-title">Depth + segmentation</span>
+            <span class="depth-label-sub">translucent depth · local semantic mask</span>
+          </div>
+          <div id="depth-overlay" class="depth-overlay">
+            <div class="depth-overlay-text">Loading depth model…</div>
+          </div>
         </div>
-        <div id="depth-overlay" class="depth-overlay">
-          <div class="depth-overlay-text">Loading depth model…</div>
+
+        <div id="map-pane" class="map-frame" hidden>
+          <img id="map-feed" alt="2D dead-reckoned map view" />
+          <div class="map-label">
+            <span class="map-label-title">Map · dead-reckon</span>
+            <span class="map-label-sub">white = path · amber/red = obstacle</span>
+          </div>
+          <div id="map-overlay" class="map-overlay">
+            <div class="map-overlay-text">Awaiting first render…</div>
+          </div>
         </div>
       </div>
     </section>
@@ -283,16 +318,6 @@
           <button id="btn-map-toggle" class="btn btn-primary" data-on="false">Enable map</button>
           <button id="btn-map-reset"  class="btn">Re-anchor</button>
         </div>
-        <div id="map-pane" class="map-frame" hidden>
-          <img id="map-feed" alt="2D dead-reckoned map view" />
-          <div class="map-label">
-            <span class="map-label-title">Map · dead-reckon</span>
-            <span class="map-label-sub">white = path · amber/red = obstacle</span>
-          </div>
-          <div id="map-overlay" class="map-overlay">
-            <div class="map-overlay-text">Awaiting first render…</div>
-          </div>
-        </div>
         <dl class="map-stats">
           <dt>pose</dt>         <dd><span id="map-pose">—</span></dd>
           <dt>confidence</dt>   <dd><span id="map-conf">—</span></dd>
@@ -316,6 +341,13 @@
           <ul id="vision-reasons" class="vision-reasons"></ul>
           <img id="vision-thumb" class="vision-thumb" alt="analyzed frame" />
           <div id="vision-meta" class="vision-meta"></div>
+        </div>
+        <div class="vision-list-head">
+          <span>Report list</span>
+          <span class="muted">latest first</span>
+        </div>
+        <div id="vision-list" class="vision-list" aria-live="polite">
+          <div class="vision-list-empty">Vision and agent evidence frames will appear here.</div>
         </div>
         <div id="vision-error" class="error-line" hidden></div>
       </section>

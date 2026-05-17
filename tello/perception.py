@@ -120,6 +120,9 @@ class PathCheck:
     direction: str
     min_depth_norm: float  # 0=far, 1=near (normalised within frame)
     obstacle_ratio: float  # fraction of patch flagged as near
+    center_closeness: float  # 0=far, 1=near for the central "what's ahead" box
+    estimated_center_distance_m: float | None  # coarse non-metric estimate
+    distance_band: str  # "far" | "mid" | "near" | "very_near" | "unknown"
     latency_ms: int
     reason: str
 
@@ -162,12 +165,15 @@ def check_path_clear(
             direction=direction,
             min_depth_norm=0.0,
             obstacle_ratio=0.0,
+            center_closeness=0.0,
+            estimated_center_distance_m=None,
+            distance_band="unknown",
             latency_ms=int((time.monotonic() - t0) * 1000),
             reason="MiDaS unavailable — depth check skipped",
         )
 
     h, w = inv_depth.shape
-    norm = (inv_depth - inv_depth.min()) / (inv_depth.ptp() + 1e-6)
+    norm = (inv_depth - inv_depth.min()) / (np.ptp(inv_depth) + 1e-6)
 
     if direction == "forward":
         patch = norm[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4]
@@ -185,12 +191,23 @@ def check_path_clear(
     obstacle_mask = patch > near_threshold
     obstacle_ratio = float(obstacle_mask.mean())
     min_depth_norm = float(patch.max())
-    blocked = obstacle_ratio > obstacle_max_ratio
+    center_patch = norm[3 * h // 8 : 5 * h // 8, 3 * w // 8 : 5 * w // 8]
+    center_closeness = float(np.percentile(center_patch, 90)) if center_patch.size else min_depth_norm
+    estimated_distance_m = _estimate_center_distance_m(center_closeness)
+    distance_band = _distance_band(center_closeness)
+    blocked = (
+        obstacle_ratio > obstacle_max_ratio
+        or center_closeness >= 0.92
+        or (estimated_distance_m is not None and estimated_distance_m < 0.55)
+    )
 
     reason = (
-        f"clear ({obstacle_ratio * 100:.0f}% of patch above near-threshold)"
+        f"clear ({obstacle_ratio * 100:.0f}% near, center ~{estimated_distance_m:.1f} m)"
         if not blocked
-        else f"BLOCKED — {obstacle_ratio * 100:.0f}% of central patch is close"
+        else (
+            f"BLOCKED — {obstacle_ratio * 100:.0f}% near, "
+            f"center object ~{estimated_distance_m:.1f} m ({distance_band})"
+        )
     )
 
     return PathCheck(
@@ -199,9 +216,36 @@ def check_path_clear(
         direction=direction,
         min_depth_norm=min_depth_norm,
         obstacle_ratio=obstacle_ratio,
+        center_closeness=center_closeness,
+        estimated_center_distance_m=estimated_distance_m,
+        distance_band=distance_band,
         latency_ms=int((time.monotonic() - t0) * 1000),
         reason=reason,
     )
+
+
+def _estimate_center_distance_m(closeness: float) -> float:
+    """Coarse monocular distance estimate for the center of frame.
+
+    MiDaS Small is relative inverse depth, not a range sensor. This maps the
+    normalized center closeness into conservative indoor buckets so the agent
+    can reason "too close / enough room" without pretending centimetre accuracy.
+    """
+    c = max(0.0, min(1.0, float(closeness)))
+    # Piecewise inverse-ish curve: 0.25 -> ~2.6 m, 0.55 -> ~1.3 m,
+    # 0.80 -> ~0.7 m, 0.95 -> ~0.35 m.
+    return round(max(0.30, min(3.0, 3.0 - 2.9 * (c ** 1.7))), 2)
+
+
+def _distance_band(closeness: float) -> str:
+    c = max(0.0, min(1.0, float(closeness)))
+    if c >= 0.88:
+        return "very_near"
+    if c >= 0.70:
+        return "near"
+    if c >= 0.45:
+        return "mid"
+    return "far"
 
 
 # --------------------------------------------------------------------------- #

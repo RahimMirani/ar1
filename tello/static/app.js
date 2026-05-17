@@ -73,6 +73,20 @@ const els = {
     viderr:   $("hud-viderr"),
     fence:    $("hud-fence"),
   },
+  path: {
+    root:   $("path-hud"),
+    fill:   $("path-hud-fill"),
+    left:   $("path-hud-left"),
+    right:  $("path-hud-right"),
+    center: $("path-hud-center"),
+    glow:   $("path-hud-glow"),
+    flow:   $("path-hud-flow"),
+    horizon: $("path-hud-horizon"),
+    target: $("path-hud-target"),
+    readout: $("path-hud-readout"),
+    mode: $("path-hud-mode"),
+    action: $("path-hud-action"),
+  },
   vel: {
     box:  $("vel-readout"),
     vx:   $("vel-vx"),
@@ -92,6 +106,7 @@ const els = {
     reasons:  $("vision-reasons"),
     thumb:    $("vision-thumb"),
     meta:     $("vision-meta"),
+    list:     $("vision-list"),
     error:    $("vision-error"),
   },
 
@@ -162,6 +177,10 @@ const state = {
   controlWs: null,
   emergency: false,
   fenceTier: "ok",
+  autonomy: {
+    active: false,
+    intentTimer: null,
+  },
 };
 
 // Human-readable label per fence tier, surfaced both on the HUD inset and
@@ -311,6 +330,7 @@ function handleTelemetry(snap) {
 
   updateBatteryBar(t.battery_pct);
   mirrorHud(t);
+  if (snap.map_status) paintMapStats(snap.map_status);
   updateMissionState();
 
   els.status.textContent = snap.last_status || "—";
@@ -501,10 +521,98 @@ function paintVelocity(lr, fb, ud, yaw) {
   if (els.hud.vy)   els.hud.vy.textContent   = fb;
   if (els.hud.vz)   els.hud.vz.textContent   = ud;
   if (els.hud.vyaw) els.hud.vyaw.textContent = yaw;
+  paintPathHud(lr, fb, yaw, {
+    mode: state.autonomy.active ? "assist" : "manual",
+    label: (lr || fb || yaw) ? "pilot input" : "hover",
+    autonomous: false,
+  });
 
   const moving = (lr || fb || ud || yaw) !== 0;
   if (els.vel.box)      els.vel.box.classList.toggle("active", moving);
   if (els.hud.velocity) els.hud.velocity.classList.toggle("active", moving);
+}
+
+function paintPathHud(lr, fb, yaw, opts = {}) {
+  const root = els.path.root;
+  if (!root) return;
+
+  const turn = Math.max(-1, Math.min(1, (yaw / 100) * 0.75 + (lr / 100) * 0.45));
+  const forward = Math.max(0, Math.min(1, Math.abs(fb) / 100));
+  const active = Math.abs(lr) > 3 || Math.abs(fb) > 3 || Math.abs(yaw) > 3;
+  root.classList.toggle("active", active);
+  root.classList.toggle("autonomous", !!opts.autonomous);
+  root.classList.toggle("checking", opts.mode === "checking");
+  root.classList.toggle("blocked", opts.mode === "blocked");
+  root.dataset.reverse = fb < -3 ? "true" : "false";
+  root.style.setProperty("--path-strength", String(0.20 + forward * 0.55));
+
+  const bottomY = 98;
+  const topY = 48;
+  const bottomCenter = 50;
+  const topCenter = 50 + turn * 20;
+  const midCenter = 50 + turn * 9;
+  const bottomHalf = 15.5;
+  const topHalf = 4.2;
+
+  const left = `M${bottomCenter - bottomHalf} ${bottomY} C${bottomCenter - bottomHalf * 0.72} 78 ${midCenter - 9} 64 ${topCenter - topHalf} ${topY}`;
+  const right = `M${bottomCenter + bottomHalf} ${bottomY} C${bottomCenter + bottomHalf * 0.72} 78 ${midCenter + 9} 64 ${topCenter + topHalf} ${topY}`;
+  const center = `M${bottomCenter} ${bottomY} C${bottomCenter} 78 ${midCenter} 64 ${topCenter} ${topY}`;
+  const horizon = `M${topCenter - 8} ${topY + 2} Q${topCenter} ${topY - 2} ${topCenter + 8} ${topY + 2}`;
+  const fill = `${left} L${topCenter + topHalf} ${topY} C${midCenter + 9} 64 ${bottomCenter + bottomHalf * 0.72} 78 ${bottomCenter + bottomHalf} ${bottomY} Z`;
+  const glow = `M${bottomCenter - bottomHalf - 3} ${bottomY} C${bottomCenter - bottomHalf} 77 ${midCenter - 11} 63 ${topCenter - topHalf - 1.5} ${topY} L${topCenter + topHalf + 1.5} ${topY} C${midCenter + 11} 63 ${bottomCenter + bottomHalf} 77 ${bottomCenter + bottomHalf + 3} ${bottomY} Z`;
+
+  els.path.left?.setAttribute("d", left);
+  els.path.right?.setAttribute("d", right);
+  els.path.center?.setAttribute("d", center);
+  els.path.flow?.setAttribute("d", center);
+  els.path.fill?.setAttribute("d", fill);
+  els.path.glow?.setAttribute("d", glow);
+  els.path.horizon?.setAttribute("d", horizon);
+  els.path.target?.setAttribute("x1", String(topCenter - 7.5));
+  els.path.target?.setAttribute("x2", String(topCenter + 7.5));
+  els.path.target?.setAttribute("y1", String(topY + 6));
+  els.path.target?.setAttribute("y2", String(topY + 6));
+  if (els.path.mode) {
+    els.path.mode.textContent = opts.mode || (opts.autonomous ? "auto" : "manual");
+  }
+  if (els.path.action) {
+    els.path.action.textContent = opts.label || (active ? "moving" : "hover");
+  }
+  if (els.path.readout) {
+    els.path.readout.classList.toggle("autonomous", !!opts.autonomous);
+    els.path.readout.classList.toggle("blocked", opts.mode === "blocked");
+  }
+}
+
+function setAutonomyPathIntent(intent, holdMs = 3200) {
+  state.autonomy.active = true;
+  clearTimeout(state.autonomy.intentTimer);
+  const lr = Number(intent.lr || 0);
+  const fb = Number(intent.fb || 0);
+  const yaw = Number(intent.yaw || 0);
+  paintPathHud(lr, fb, yaw, {
+    autonomous: true,
+    mode: intent.mode || "auto",
+    label: intent.label || "planning",
+  });
+  state.autonomy.intentTimer = setTimeout(() => {
+    if (!state.autonomy.active) return;
+    paintPathHud(0, 0, 0, {
+      autonomous: true,
+      mode: "auto",
+      label: "holding position",
+    });
+  }, holdMs);
+}
+
+function clearAutonomyPathIntent() {
+  state.autonomy.active = false;
+  clearTimeout(state.autonomy.intentTimer);
+  state.autonomy.intentTimer = null;
+  paintPathHud(lastSentVel.lr, lastSentVel.fb, lastSentVel.yaw, {
+    mode: "manual",
+    label: (lastSentVel.lr || lastSentVel.fb || lastSentVel.yaw) ? "pilot input" : "hover",
+  });
 }
 
 function holdKeyDown(code) {
@@ -690,6 +798,102 @@ function connectEventsWs() {
 
 // ----------------------------- vision ----------------------------- //
 
+const renderedVisionKeys = new Set();
+
+function clearVisionList() {
+  if (!els.vision.list) return;
+  els.vision.list.replaceChildren();
+  const empty = document.createElement("div");
+  empty.className = "vision-list-empty";
+  empty.textContent = "Vision and agent evidence frames will appear here.";
+  els.vision.list.appendChild(empty);
+  renderedVisionKeys.clear();
+}
+
+function visionKey(p) {
+  return [
+    p.source || "manual",
+    p.description || "",
+    p.thumbnail_b64 ? p.thumbnail_b64.slice(0, 80) : "",
+  ].join("|");
+}
+
+function buildVisionCard(p) {
+  const card = document.createElement("article");
+  card.className = "vision-card";
+  card.dataset.severity = p.severity || "none";
+
+  const head = document.createElement("div");
+  head.className = "vision-card-head";
+
+  const sev = document.createElement("span");
+  sev.className = "vision-severity";
+  sev.dataset.severity = p.severity || "none";
+  sev.textContent = p.severity || "none";
+  head.appendChild(sev);
+
+  const chips = document.createElement("span");
+  chips.className = "vision-chips";
+  const addChip = (label, on, red) => {
+    const s = document.createElement("span");
+    s.className = "vision-chip" + (on ? (red ? " on-red" : " on") : "");
+    s.textContent = label;
+    chips.appendChild(s);
+  };
+  addChip("fire", !!p.fire_visible, true);
+  addChip("smoke", !!p.smoke_visible, false);
+  head.appendChild(chips);
+
+  const conf = document.createElement("span");
+  conf.className = "vision-conf";
+  conf.textContent = `${Math.round((p.confidence || 0) * 100)}% conf`;
+  head.appendChild(conf);
+  card.appendChild(head);
+
+  const desc = document.createElement("p");
+  desc.className = "vision-desc";
+  desc.textContent = p.description || "";
+  card.appendChild(desc);
+
+  const reasons = document.createElement("ul");
+  reasons.className = "vision-reasons";
+  for (const r of (p.reasons || [])) {
+    const li = document.createElement("li");
+    li.textContent = r;
+    reasons.appendChild(li);
+  }
+  card.appendChild(reasons);
+
+  if (p.thumbnail_b64) {
+    const img = document.createElement("img");
+    img.className = "vision-thumb";
+    img.alt = "analyzed frame";
+    img.src = `data:image/jpeg;base64,${p.thumbnail_b64}`;
+    card.appendChild(img);
+  }
+
+  const src = p.source || "manual";
+  const meta = document.createElement("div");
+  meta.className = "vision-meta";
+  meta.textContent = `${p.model || "?"} · ${src} · ${p.latency_ms ?? "?"} ms`;
+  card.appendChild(meta);
+
+  return card;
+}
+
+function appendVisionCard(p) {
+  if (!els.vision.list) return;
+  const key = visionKey(p);
+  if (renderedVisionKeys.has(key)) return;
+  renderedVisionKeys.add(key);
+  const empty = els.vision.list.querySelector(".vision-list-empty");
+  if (empty) empty.remove();
+  els.vision.list.prepend(buildVisionCard(p));
+  while (els.vision.list.children.length > 12) {
+    els.vision.list.removeChild(els.vision.list.lastChild);
+  }
+}
+
 function renderVisionResult(p) {
   if (!els.vision.result) return;
   els.vision.result.hidden = false;
@@ -730,6 +934,7 @@ function renderVisionResult(p) {
 
   const src = p.source || "manual";
   els.vision.meta.textContent = `${p.model || "?"} · ${src} · ${p.latency_ms ?? "?"} ms`;
+  appendVisionCard(p);
 
   const lvl = (p.fire_visible || sev === "high") ? "error"
             : (p.smoke_visible || sev === "medium") ? "warn"
@@ -823,6 +1028,11 @@ async function postAudio(path) {
     } else {
       els.audio.error.hidden = true;
     }
+    if (data.agent?.started) {
+      log("info", `audio trigger started agent (${data.agent.trigger || "audio"})`);
+    } else if (data.agent?.reason) {
+      log("warn", `audio trigger skipped: ${data.agent.reason}`);
+    }
     return data;
   } catch (err) {
     log("error", `audio request failed: ${err}`);
@@ -867,10 +1077,23 @@ function renderPerceptionCheck(p) {
     return;
   }
   el.dataset.clear = p.clear ? "true" : "false";
+  const dist = (typeof p.estimated_center_distance_m === "number")
+    ? `${p.estimated_center_distance_m.toFixed(1)} m`
+    : "unknown";
+  const band = p.distance_band || "unknown";
   el.textContent =
     `${p.direction}: ${p.clear ? "CLEAR" : "BLOCKED"} · ` +
     `obstacle ratio ${(p.obstacle_ratio * 100).toFixed(0)}% · ` +
+    `center ${dist} (${band}) · ` +
     `${p.latency_ms} ms`;
+  if (p.source === "agent" || p.source === "move_tool" || p.source === "explore_step") {
+    setAutonomyPathIntent({
+      fb: p.clear ? 45 : 0,
+      yaw: p.clear ? 0 : 55,
+      mode: p.clear ? "clear" : "blocked",
+      label: p.clear ? `path clear · ${dist}` : `blocked · ${band}`,
+    }, p.clear ? 2200 : 3600);
+  }
   log(p.clear ? "info" : "warn", `perception (${p.direction}): ${p.reason}`);
 }
 
@@ -1088,6 +1311,7 @@ async function setMap(enable) {
 
 if (els.map.toggle) {
   els.map.toggle.addEventListener("click", () => setMap(!mapEnabled));
+  setMap(true);
 }
 if (els.map.reset) {
   els.map.reset.addEventListener("click", async () => {
@@ -1165,19 +1389,27 @@ function renderAgentState(p) {
     if (els.agent.meta) els.agent.meta.hidden = false;
   }
   if (p.state === "running" || p.state === "starting") {
+    state.autonomy.active = true;
     if (!agentRun.startedAt) {
       agentRun.startedAt = Date.now();
       clearAgentTranscript();
+      clearVisionList();
       startAgentTimer();
     }
+    setAutonomyPathIntent({
+      mode: "auto",
+      label: p.state === "starting" ? "arming autonomy" : "exploring room",
+    }, 1800);
     log("info", `agent: ${p.state}${p.trigger ? " ("+p.trigger+")" : ""}`);
   } else if (p.state === "done") {
     stopAgentTimer();
     agentRun.startedAt = null;
+    clearAutonomyPathIntent();
     log("info", `agent: done verdict=${p.verdict || "?"}`);
   } else if (p.state === "error") {
     stopAgentTimer();
     agentRun.startedAt = null;
+    clearAutonomyPathIntent();
     addAgentEntry("error", p.error || "agent error");
     log("error", `agent error: ${p.error || ""}`);
   }
@@ -1195,10 +1427,68 @@ function renderAgentToolCall(p) {
   const args = p.args ? JSON.stringify(p.args) : "{}";
   body.appendChild(document.createTextNode(`(${args})`));
   addAgentEntry("tool", body);
+  paintAgentToolIntent(p.tool, p.args || {});
 }
 
 function renderAgentToolResult(p) {
   addAgentEntry("result", p.result || "");
+  if (typeof p.result === "string" && p.result.startsWith("REFUSED:")) {
+    setAutonomyPathIntent({
+      mode: "blocked",
+      label: "move refused",
+      yaw: 45,
+    }, 3200);
+  }
+}
+
+function paintAgentToolIntent(tool, args) {
+  if (tool === "check_path_clear") {
+    setAutonomyPathIntent({
+      mode: "checking",
+      label: `checking ${args.direction || "forward"}`,
+      fb: args.direction === "left" ? 0 : args.direction === "right" ? 0 : 34,
+      lr: args.direction === "left" ? -38 : args.direction === "right" ? 38 : 0,
+    }, 2400);
+    return;
+  }
+  if (tool === "move" || tool === "explore_step") {
+    const direction = (args.direction || args.preferred_direction || "forward").toLowerCase();
+    const cm = Number(args.distance_cm || args.max_step_cm || 55);
+    const speed = Math.max(28, Math.min(64, cm));
+    const vec = { lr: 0, fb: 0, yaw: 0 };
+    if (direction === "forward") vec.fb = speed;
+    else if (direction === "back") vec.fb = -speed;
+    else if (direction === "left") vec.lr = -speed;
+    else if (direction === "right") vec.lr = speed;
+    setAutonomyPathIntent({
+      ...vec,
+      mode: "auto",
+      label: `${direction} ${cm || ""} cm`.trim(),
+    }, 4200);
+    return;
+  }
+  if (tool === "rotate") {
+    const deg = Number(args.degrees || 0);
+    setAutonomyPathIntent({
+      yaw: deg >= 0 ? 58 : -58,
+      mode: "auto",
+      label: `rotate ${Math.round(deg)}°`,
+    }, 2600);
+    return;
+  }
+  if (tool === "analyze_view") {
+    setAutonomyPathIntent({
+      mode: "scan",
+      label: "analyzing view",
+    }, 2800);
+    return;
+  }
+  if (tool === "hover" || tool === "land") {
+    setAutonomyPathIntent({
+      mode: tool === "land" ? "auto" : "hold",
+      label: tool === "land" ? "landing" : "hover hold",
+    }, 2600);
+  }
 }
 
 function renderAgentFinding(p) {
@@ -1331,6 +1621,7 @@ if (els.vision.btn) {
 // ----------------------------- boot ---------------------------------- //
 
 log("info", "dashboard loaded");
+paintPathHud(0, 0, 0);
 connectTelemetryWs();
 connectControlWs();
 connectEventsWs();

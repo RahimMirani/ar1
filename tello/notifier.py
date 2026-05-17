@@ -90,6 +90,9 @@ async def run_notifier_loop() -> None:
                         "description":   ev.get("description"),
                         "reasons":       ev.get("reasons", []),
                         "thumbnail_b64": ev.get("thumbnail_b64"),
+                        "model":         ev.get("model"),
+                        "source":        ev.get("source"),
+                        "latency_ms":    ev.get("latency_ms"),
                     }
                 )
             elif t == "agent_tool_call":
