@@ -36,8 +36,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-import numpy as np
 import av as _av
+import cv2
+import numpy as np
 from djitellopy import Tello
 from djitellopy.tello import BackgroundFrameRead, TelloException
 
@@ -266,11 +267,21 @@ class Drone:
                 self._streaming = False
 
     def get_frame(self):
-        """Return the latest decoded frame as a numpy array, or None."""
+        """Return the latest decoded frame as a **BGR** numpy array, or None.
+
+        djitellopy decodes Tello's H.264 stream into RGB (via ``PIL.Image``),
+        but every downstream consumer in this project uses OpenCV convention
+        (BGR) — ``cv2.imencode`` for the MJPEG stream, ``cv2.imshow`` for the
+        smoke viewer, and OpenCV in general for any future vision code. We
+        do the single conversion here so callers never see the mismatch.
+        """
         if not self._streaming:
             return None
         try:
-            return self._tello.get_frame_read().frame
+            rgb = self._tello.get_frame_read().frame
+            if rgb is None:
+                return None
+            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
         except Exception as exc:
             logger.warning("get_frame failed: %s", exc)
             return None
