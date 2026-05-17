@@ -955,6 +955,12 @@ async function setDepthView(enable) {
 
 if (depthToggleBtn) {
   depthToggleBtn.addEventListener("click", () => setDepthView(!depthEnabled));
+  // Default-on: kick the depth pipeline as soon as the page loads so the
+  // tile is live before the operator does anything. The HTML defaults
+  // already have the layout in the "on" position; this call makes the
+  // backend match and wires the MJPEG src. Users can still toggle it
+  // off via the same button.
+  setDepthView(true);
 }
 
 // ----------------------------- agent ----------------------------- //
