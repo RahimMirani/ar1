@@ -84,11 +84,72 @@ async def lifespan(_app: FastAPI):
     # agent worker) publish via bus.publish_threadsafe, which needs the
     # running loop.
     bus.attach_loop(asyncio.get_running_loop())
+    bridge_task = asyncio.create_task(_audio_alarm_to_agent_bridge())
     try:
         yield
     finally:
         logger.info("shutting down: closing drone")
+        bridge_task.cancel()
+        try:
+            await bridge_task
+        except (asyncio.CancelledError, Exception):
+            pass
         drone.close()
+
+
+async def _audio_alarm_to_agent_bridge() -> None:
+    """Auto-trigger the agent when the audio detector (or the Simulate
+    button) emits an ``audio_alarm`` with state ``alarm``.
+
+    This is the production handoff between Phase B and Phase C. We gate
+    on three conditions:
+
+    * the drone is connected (otherwise takeoff is guaranteed to fail);
+    * the agent isn't already running (single-flight);
+    * the alarm event is a *transition into* ``alarm`` — we ignore
+      repeats so a sustained tone doesn't restart the mission.
+    """
+    queue = bus.subscribe()
+    last_state: str | None = None
+    try:
+        while True:
+            ev = await queue.get()
+            if ev.get("type") != "audio_alarm":
+                continue
+            state = ev.get("state")
+            transitioned = state == "alarm" and last_state != "alarm"
+            last_state = state
+            if not transitioned:
+                continue
+            if not drone.snapshot().connected:
+                logger.info("audio alarm received but drone is not connected")
+                await bus.publish(
+                    {
+                        "type": "agent_skipped",
+                        "reason": "drone not connected",
+                        "trigger": f"audio:{ev.get('source', '?')}",
+                    }
+                )
+                continue
+            if agent_is_busy():
+                logger.info("audio alarm received but agent is busy")
+                await bus.publish(
+                    {
+                        "type": "agent_skipped",
+                        "reason": "agent already running",
+                        "trigger": f"audio:{ev.get('source', '?')}",
+                    }
+                )
+                continue
+            trigger = f"audio:{ev.get('source', '?')}"
+            logger.info("audio alarm -> auto-triggering agent (%s)", trigger)
+            asyncio.create_task(_run_mission_task(trigger))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("audio->agent bridge crashed: %s", exc)
+    finally:
+        bus.unsubscribe(queue)
 
 
 app = FastAPI(title="FireDrone Tello Dashboard", lifespan=lifespan)

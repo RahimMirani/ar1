@@ -987,6 +987,10 @@ eventHandlers["agent_tool_call"]   = renderAgentToolCall;
 eventHandlers["agent_tool_result"] = renderAgentToolResult;
 eventHandlers["agent_finding"]     = renderAgentFinding;
 
+eventHandlers["agent_skipped"] = (p) => {
+  log("warn", `agent auto-trigger skipped: ${p.reason} (trigger=${p.trigger || "?"})`);
+};
+
 if (els.agent.start) {
   els.agent.start.addEventListener("click", async () => {
     if (!state.connected) {
