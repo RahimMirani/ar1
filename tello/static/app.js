@@ -66,6 +66,11 @@ const els = {
     vy:       $("hud-vy"),
     vz:       $("hud-vz"),
     vyaw:     $("hud-vyaw"),
+    linkq:    $("hud-linkq"),
+    snr:      $("hud-snr"),
+    loss:     $("hud-loss"),
+    rtt:      $("hud-rtt"),
+    viderr:   $("hud-viderr"),
   },
   vel: {
     box:  $("vel-readout"),
@@ -279,6 +284,17 @@ function mirrorHud(t) {
   setNum(els.hud.battery,  t.battery_pct);
   setNum(els.hud.altitude, t.tof_cm);
   setNum(els.hud.flight,   t.flight_time_s);
+  paintLink(t);
+}
+
+// Paint the four link-health numbers into the bottom-right HUD inset.
+// All four can be null (server hasn't sampled yet, or the SDK 'wifi?'
+// query timed out) — render '—' so the inset doesn't flash blank.
+function paintLink(t) {
+  setNum(els.hud.snr,    t.wifi_snr_db);
+  setNum(els.hud.loss,   t.packet_loss_pct);
+  setNum(els.hud.rtt,    t.link_rtt_ms);
+  setNum(els.hud.viderr, t.video_errors_per_sec);
 }
 
 // ----------------------- control WebSocket --------------------------- //
