@@ -94,6 +94,19 @@ const els = {
     meta:     $("vision-meta"),
     error:    $("vision-error"),
   },
+
+  audio: {
+    start:    $("btn-audio-start"),
+    stop:     $("btn-audio-stop"),
+    simulate: $("btn-audio-simulate"),
+    badge:    $("audio-state-badge"),
+    band:     $("audio-meter-band"),
+    bandDb:   $("audio-meter-band-db"),
+    broad:    $("audio-meter-broad"),
+    broadDb:  $("audio-meter-broad-db"),
+    device:   $("audio-device"),
+    error:    $("audio-error"),
+  },
 };
 
 const state = {
@@ -679,6 +692,85 @@ function renderVisionResult(p) {
 }
 
 eventHandlers["vision_result"] = renderVisionResult;
+
+// ----------------------------- audio ----------------------------- //
+
+// Map a dBFS reading to a 0-100% bar width. -60 dB -> 0%, 0 dB -> 100%.
+function dbToPct(db) {
+  if (db === null || db === undefined || !isFinite(db)) return 0;
+  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+}
+
+function setAudioState(stateKey) {
+  if (!els.audio.badge) return;
+  els.audio.badge.dataset.state = stateKey;
+  const labels = { idle: "off", armed: "listening", alarm: "ALARM", error: "error" };
+  els.audio.badge.textContent = labels[stateKey] || stateKey;
+  // Bar color follows state.
+  for (const bar of [els.audio.band, els.audio.broad]) {
+    if (!bar) continue;
+    bar.classList.toggle("hot",   stateKey === "armed");
+    bar.classList.toggle("alarm", stateKey === "alarm");
+  }
+}
+
+function renderAudioLevel(p) {
+  if (els.audio.band) {
+    els.audio.band.querySelector(".fill").style.width = `${dbToPct(p.alarm_band_db)}%`;
+    els.audio.bandDb.textContent = (typeof p.alarm_band_db === "number")
+      ? `${p.alarm_band_db.toFixed(0)} dB` : "—";
+  }
+  if (els.audio.broad) {
+    els.audio.broad.querySelector(".fill").style.width = `${dbToPct(p.broadband_db)}%`;
+    els.audio.broadDb.textContent = (typeof p.broadband_db === "number")
+      ? `${p.broadband_db.toFixed(0)} dB` : "—";
+  }
+}
+
+function renderAudioAlarm(p) {
+  setAudioState(p.state);
+  const src = p.source ? ` [${p.source}]` : "";
+  if (p.state === "alarm") {
+    log("error", `audio alarm${src}: ${p.reason || "tone detected"}`);
+  } else if (p.state === "armed") {
+    log("info",  `audio armed${src}${p.reason ? " — " + p.reason : ""}`);
+  } else if (p.state === "idle") {
+    log("info",  "audio monitor stopped");
+  } else if (p.state === "error") {
+    log("error", `audio error: ${p.error || "unknown"}`);
+    if (els.audio.error) {
+      els.audio.error.hidden = false;
+      els.audio.error.textContent = p.error || "audio error";
+    }
+  }
+}
+
+eventHandlers["audio_level"] = renderAudioLevel;
+eventHandlers["audio_alarm"] = renderAudioAlarm;
+
+async function postAudio(path) {
+  try {
+    const res = await fetch(path, { method: "POST" });
+    const data = await res.json();
+    if (data.device) els.audio.device.textContent = data.device;
+    if (data.state)  setAudioState(data.state);
+    if (data.error) {
+      els.audio.error.hidden = false;
+      els.audio.error.textContent = data.error;
+      log("error", `audio: ${data.error}`);
+    } else {
+      els.audio.error.hidden = true;
+    }
+    return data;
+  } catch (err) {
+    log("error", `audio request failed: ${err}`);
+    return null;
+  }
+}
+
+if (els.audio.start)    els.audio.start.addEventListener("click",    () => postAudio("/api/audio/start"));
+if (els.audio.stop)     els.audio.stop.addEventListener("click",     () => postAudio("/api/audio/stop"));
+if (els.audio.simulate) els.audio.simulate.addEventListener("click", () => postAudio("/api/audio/simulate"));
 
 if (els.vision.btn) {
   els.vision.btn.addEventListener("click", async () => {

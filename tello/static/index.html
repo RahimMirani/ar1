@@ -176,6 +176,34 @@
       </section>
 
       <section class="card">
+        <h2 class="card-title">Audio
+          <span id="audio-state-badge" class="audio-state-badge" data-state="idle">off</span>
+        </h2>
+        <div class="row">
+          <button id="btn-audio-start" class="btn btn-primary">Arm mic</button>
+          <button id="btn-audio-stop"  class="btn">Stop</button>
+          <button id="btn-audio-simulate" class="btn">Simulate alarm</button>
+        </div>
+        <div class="audio-meter">
+          <div class="audio-meter-row">
+            <span class="audio-meter-label">3 kHz band</span>
+            <div id="audio-meter-band" class="audio-meter-bar"><div class="fill"></div></div>
+            <span id="audio-meter-band-db" class="audio-meter-val">—</span>
+          </div>
+          <div class="audio-meter-row">
+            <span class="audio-meter-label">broadband</span>
+            <div id="audio-meter-broad" class="audio-meter-bar"><div class="fill"></div></div>
+            <span id="audio-meter-broad-db" class="audio-meter-val">—</span>
+          </div>
+        </div>
+        <div id="audio-status-line" class="status-line">
+          <span class="muted">device</span>
+          <span id="audio-device">—</span>
+        </div>
+        <div id="audio-error" class="error-line" hidden></div>
+      </section>
+
+      <section class="card">
         <h2 class="card-title">Vision <span class="muted">gpt-4o-mini</span></h2>
         <div class="row">
           <button id="btn-vision-analyze" class="btn btn-primary">Analyze current view</button>

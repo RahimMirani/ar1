@@ -39,6 +39,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 from drone import Drone, VALID_FLIP_DIRECTIONS  # noqa: E402
 from events import bus  # noqa: E402
 from vision import analyze_frame  # noqa: E402
+from audio import monitor as audio_monitor  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,6 +141,39 @@ async def api_vision_analyze() -> dict[str, Any]:
     payload = result.to_dict()
     await bus.publish({"type": "vision_result", "source": "manual", **payload})
     return payload
+
+
+# --------------------------------------------------------------------------- #
+# Audio — smoke-alarm detector
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/audio/start")
+async def api_audio_start() -> dict[str, Any]:
+    status = await asyncio.to_thread(audio_monitor.start)
+    return status.to_dict()
+
+
+@app.post("/api/audio/stop")
+async def api_audio_stop() -> dict[str, Any]:
+    status = await asyncio.to_thread(audio_monitor.stop)
+    return status.to_dict()
+
+
+@app.get("/api/audio/status")
+async def api_audio_status() -> dict[str, Any]:
+    return audio_monitor.status().to_dict()
+
+
+@app.post("/api/audio/simulate")
+async def api_audio_simulate() -> dict[str, Any]:
+    """Manually fire an audio_alarm event for ~4 s.
+
+    Lets you exercise the agent's auto-trigger without holding a smoke
+    alarm next to the mic. The downstream code path is identical to a
+    real detection.
+    """
+    return await asyncio.to_thread(audio_monitor.simulate_alarm)
 
 
 # --------------------------------------------------------------------------- #
