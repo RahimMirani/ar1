@@ -6,14 +6,20 @@
   <title>FireDrone — Dispatcher</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/dashboard.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-dot"></span>
-      <span class="brand-name">FireDrone · <em>Dispatcher</em></span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="square">
+          <line x1="3"  y1="4.5"  x2="13" y2="4.5"  />
+          <line x1="3"  y1="8"    x2="13" y2="8"    />
+          <line x1="3"  y1="11.5" x2="13" y2="11.5" />
+        </svg>
+      </span>
+      <span class="brand-name">Firedrone <em>·</em> Dispatcher</span>
     </div>
     <span id="status-pill" class="status-pill" data-state="idle">Standby</span>
     <span id="now-clock" class="now-clock">--:--:--</span>
@@ -27,6 +33,7 @@
         The drone is on standby. When the smoke alarm fires the agent will take off, sweep the room, and report its verdict here.
       </div>
     </div>
+    <div class="incident-dispatch" id="incident-dispatch" data-on="false">No dispatch</div>
     <div class="incident-meta" id="incident-meta">—</div>
   </section>
 
@@ -41,11 +48,56 @@
         <div id="video-overlay" class="video-overlay">
           <div class="video-overlay-text">Standby</div>
         </div>
+
         <div class="hud-strip">
-          <span><b id="hud-battery">—</b><span class="u">%</span><span class="lbl">batt</span></span>
-          <span><b id="hud-altitude">—</b><span class="u">cm</span><span class="lbl">alt</span></span>
-          <span><b id="hud-flight">—</b><span class="u">s</span><span class="lbl">flight</span></span>
-          <span><b id="hud-audio-band">—</b><span class="u">dB</span><span class="lbl">3 kHz</span></span>
+          <div class="hud-meter" title="Battery">
+            <div class="ring" id="battery-ring">
+              <svg viewBox="0 0 38 38">
+                <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
+                <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+              </svg>
+              <span class="pct" id="battery-pct">—</span>
+            </div>
+            <div class="meter-label">
+              <span class="lbl">battery</span>
+              <span class="val"><span id="hud-battery">—</span>%</span>
+            </div>
+          </div>
+
+          <div class="hud-meter" title="Flight time vs 90 s cap">
+            <div class="ring" id="flight-ring">
+              <svg viewBox="0 0 38 38">
+                <circle class="ring-track" cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5" />
+                <circle class="ring-fill"  cx="19" cy="19" r="15.5" fill="none" stroke-width="2.5"
+                        stroke-linecap="round"
+                        stroke-dasharray="97.4" stroke-dashoffset="97.4" />
+              </svg>
+              <span class="pct" id="flight-pct">0</span>
+            </div>
+            <div class="meter-label">
+              <span class="lbl">flight / 90 s</span>
+              <span class="val"><span id="hud-flight">0.0</span>s</span>
+            </div>
+          </div>
+
+          <div class="hud-meter" title="Altitude">
+            <div class="alt-bar"><div class="fill" id="alt-fill"></div></div>
+            <div class="meter-label">
+              <span class="lbl">alt</span>
+              <span class="val"><span id="hud-altitude">—</span>cm</span>
+            </div>
+          </div>
+
+          <div class="hud-audio" id="hud-audio">
+            <span class="lbl">3 kHz band</span>
+            <div class="bar">
+              <div class="fill" id="audio-fill"></div>
+              <div class="threshold" id="audio-threshold"></div>
+            </div>
+            <span class="val"><span id="hud-audio-band">—</span></span>
+          </div>
         </div>
       </div>
     </section>
@@ -55,24 +107,24 @@
         <span class="card-title">Mission</span>
         <span id="mission-pill" class="card-tag" data-state="idle">idle</span>
       </header>
-      <div class="mission-stats">
-        <div class="stat">
-          <div class="stat-k">mission</div>
-          <div class="stat-v" id="mission-id">—</div>
+
+      <div class="mission-head">
+        <div>
+          <div class="mh-id"      id="mission-id">—</div>
+          <div class="mh-trigger" id="mission-trigger">awaiting trigger</div>
         </div>
-        <div class="stat">
-          <div class="stat-k">trigger</div>
-          <div class="stat-v" id="mission-trigger">—</div>
-        </div>
-        <div class="stat">
-          <div class="stat-k">elapsed</div>
-          <div class="stat-v" id="mission-elapsed">—</div>
-        </div>
-        <div class="stat">
-          <div class="stat-k">evidence</div>
-          <div class="stat-v" id="mission-evidence-count">0</div>
+        <div>
+          <div class="mh-timer"><span id="mission-elapsed">0.0</span><span class="unit">s</span></div>
+          <div class="mh-timer-cap">cap 90.0 s · <span id="mission-evidence-count">0</span> frames</div>
         </div>
       </div>
+
+      <ol class="stepper" id="mission-stepper">
+        <li class="step" data-phase="trigger" data-status="default">Trigger</li>
+        <li class="step" data-phase="inspect" data-status="default">Inspect</li>
+        <li class="step" data-phase="decide"  data-status="default">Decide</li>
+        <li class="step" data-phase="report"  data-status="default">Report</li>
+      </ol>
 
       <div class="mission-step">
         <span class="muted">current step</span>
@@ -81,17 +133,17 @@
 
       <ol id="mission-feed" class="mission-feed"></ol>
     </section>
-
-    <section class="card evidence-card">
-      <header class="card-head">
-        <span class="card-title">Evidence frames</span>
-        <span id="evidence-count" class="card-tag">0</span>
-      </header>
-      <div id="evidence-gallery" class="evidence-gallery">
-        <div class="evidence-empty">Evidence frames the agent captures will appear here in order.</div>
-      </div>
-    </section>
   </main>
+
+  <section class="card evidence-card">
+    <header class="card-head">
+      <span class="card-title">Evidence frames</span>
+      <span id="evidence-count" class="card-tag">0</span>
+    </header>
+    <div id="evidence-gallery" class="evidence-gallery">
+      <div class="evidence-empty">Evidence frames the agent captures will appear here in order.</div>
+    </div>
+  </section>
 
   <script src="/static/dashboard.js"></script>
 </body>
