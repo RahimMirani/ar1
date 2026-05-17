@@ -107,6 +107,14 @@ const els = {
     device:   $("audio-device"),
     error:    $("audio-error"),
   },
+
+  perception: {
+    badge:     $("perception-state-badge"),
+    check:     $("btn-perception-check"),
+    score:     $("perception-score"),
+    lastAlert: $("perception-last-alert"),
+    result:    $("perception-check-result"),
+  },
 };
 
 const state = {
@@ -771,6 +779,69 @@ async function postAudio(path) {
 if (els.audio.start)    els.audio.start.addEventListener("click",    () => postAudio("/api/audio/start"));
 if (els.audio.stop)     els.audio.stop.addEventListener("click",     () => postAudio("/api/audio/stop"));
 if (els.audio.simulate) els.audio.simulate.addEventListener("click", () => postAudio("/api/audio/simulate"));
+
+// ----------------------------- perception ----------------------------- //
+
+function setPerceptionState(enabled) {
+  if (!els.perception.badge) return;
+  els.perception.badge.dataset.state = enabled ? "armed" : "idle";
+  els.perception.badge.textContent   = enabled ? "watchdog on" : "watchdog off";
+}
+
+function renderPerceptionState(p) {
+  setPerceptionState(!!p.enabled);
+  log("info", p.enabled ? "obstacle watchdog armed" : "obstacle watchdog disarmed");
+}
+
+function renderPerceptionAlert(p) {
+  if (els.perception.score) {
+    els.perception.score.textContent = (typeof p.score === "number") ? p.score.toFixed(2) : "—";
+  }
+  if (els.perception.lastAlert) {
+    els.perception.lastAlert.textContent = p.kind || "alert";
+  }
+  log("error", `perception: ${p.reason || p.kind || "alert"} -> ${p.action || ""}`);
+}
+
+function renderPerceptionCheck(p) {
+  const el = els.perception.result;
+  if (!el) return;
+  el.hidden = false;
+  if (!p.available) {
+    el.dataset.clear = "unavailable";
+    el.textContent = "MiDaS not available — depth check skipped";
+    return;
+  }
+  el.dataset.clear = p.clear ? "true" : "false";
+  el.textContent =
+    `${p.direction}: ${p.clear ? "CLEAR" : "BLOCKED"} · ` +
+    `obstacle ratio ${(p.obstacle_ratio * 100).toFixed(0)}% · ` +
+    `${p.latency_ms} ms`;
+  log(p.clear ? "info" : "warn", `perception (${p.direction}): ${p.reason}`);
+}
+
+eventHandlers["perception_state"] = renderPerceptionState;
+eventHandlers["perception_alert"] = renderPerceptionAlert;
+eventHandlers["perception_check"] = renderPerceptionCheck;
+
+if (els.perception.check) {
+  els.perception.check.addEventListener("click", async () => {
+    els.perception.check.disabled = true;
+    try {
+      const res = await fetch("/api/perception/check?direction=forward", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        log("error", `perception: ${data.error}`);
+      } else {
+        renderPerceptionCheck({ source: "manual", ...data });
+      }
+    } catch (err) {
+      log("error", `perception: ${err}`);
+    } finally {
+      els.perception.check.disabled = false;
+    }
+  });
+}
 
 if (els.vision.btn) {
   els.vision.btn.addEventListener("click", async () => {

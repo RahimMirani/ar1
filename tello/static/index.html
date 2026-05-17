@@ -204,6 +204,23 @@
       </section>
 
       <section class="card">
+        <h2 class="card-title">Safety
+          <span id="perception-state-badge" class="audio-state-badge" data-state="idle">watchdog off</span>
+        </h2>
+        <div class="row">
+          <button id="btn-perception-check" class="btn">Check forward path</button>
+        </div>
+        <div id="perception-line" class="perception-line">
+          <span class="muted">flow score</span>
+          <span id="perception-score">—</span>
+          <span class="muted">·</span>
+          <span class="muted">last alert</span>
+          <span id="perception-last-alert">—</span>
+        </div>
+        <div id="perception-check-result" class="perception-check-result" hidden></div>
+      </section>
+
+      <section class="card">
         <h2 class="card-title">Vision <span class="muted">gpt-4o-mini</span></h2>
         <div class="row">
           <button id="btn-vision-analyze" class="btn btn-primary">Analyze current view</button>

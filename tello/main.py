@@ -40,6 +40,7 @@ from drone import Drone, VALID_FLIP_DIRECTIONS  # noqa: E402
 from events import bus  # noqa: E402
 from vision import analyze_frame  # noqa: E402
 from audio import monitor as audio_monitor  # noqa: E402
+from perception import OpticalFlowWatchdog, check_path_clear  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -56,6 +57,14 @@ JPEG_QUALITY = 70
 
 # Single shared drone instance for the process. The dashboard is single-user.
 drone = Drone()
+
+# Optical-flow watchdog. Auto-starts on takeoff (set_velocity callable is
+# the documented fire-and-forget RC path so the watchdog never goes
+# through the SDK command lock).
+perception_watchdog = OpticalFlowWatchdog(
+    get_frame=drone.get_frame,
+    drone_stop=drone.stop_velocity,
+)
 
 
 @asynccontextmanager
@@ -174,6 +183,42 @@ async def api_audio_simulate() -> dict[str, Any]:
     real detection.
     """
     return await asyncio.to_thread(audio_monitor.simulate_alarm)
+
+
+# --------------------------------------------------------------------------- #
+# Perception — depth check + optical-flow watchdog
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/perception/start")
+async def api_perception_start() -> dict[str, Any]:
+    return (await asyncio.to_thread(perception_watchdog.start)).to_dict()
+
+
+@app.post("/api/perception/stop")
+async def api_perception_stop() -> dict[str, Any]:
+    return (await asyncio.to_thread(perception_watchdog.stop)).to_dict()
+
+
+@app.get("/api/perception/status")
+async def api_perception_status() -> dict[str, Any]:
+    return perception_watchdog.status().to_dict()
+
+
+@app.post("/api/perception/check")
+async def api_perception_check(direction: str = "forward") -> dict[str, Any]:
+    """Run a one-shot depth check on the current frame.
+
+    Useful as a manual smoke test from the operator console (also what
+    the agent's ``check_path_clear`` tool calls internally).
+    """
+    frame = drone.get_frame()
+    if frame is None:
+        return {"error": "no frame available"}
+    result = await asyncio.to_thread(check_path_clear, frame, direction=direction)
+    payload = result.to_dict()
+    await bus.publish({"type": "perception_check", "source": "manual", **payload})
+    return payload
 
 
 # --------------------------------------------------------------------------- #
@@ -315,9 +360,15 @@ async def _execute_command(cmd: dict[str, Any]) -> dict[str, Any]:
 
     if action == "takeoff":
         await asyncio.to_thread(drone.takeoff)
+        # Reactive safety: start the optical-flow watchdog whenever the
+        # drone is in the air. Idempotent; the watchdog manages its own
+        # thread lifecycle.
+        await asyncio.to_thread(perception_watchdog.start)
     elif action == "land":
+        await asyncio.to_thread(perception_watchdog.stop)
         await asyncio.to_thread(drone.land)
     elif action == "emergency":
+        await asyncio.to_thread(perception_watchdog.stop)
         await asyncio.to_thread(drone.emergency)
     elif action == "set_velocity":
         lr  = int(cmd.get("lr", 0))
