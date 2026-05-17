@@ -273,6 +273,12 @@ class Drone:
         # smooth out the noise without lagging operator perception.
         self._link_history: deque[tuple[float, int, int]] = deque(maxlen=10)
 
+        # Soft geofence tier — evaluated on every telemetry tick from the
+        # link metrics above. ``_fence_land_triggered`` latches True after
+        # an automatic land is dispatched so we don't keep firing it.
+        self._fence_tier: str = "ok"
+        self._fence_land_triggered: bool = False
+
     # ------------------------------------------------------------------ #
     # Context manager
     # ------------------------------------------------------------------ #
@@ -368,6 +374,10 @@ class Drone:
             self._tello.takeoff()
             self._flying = True
             self._last_status = "TAKEOFF"
+            # Re-arm the fence so a previous auto-land doesn't suppress
+            # the safety net on this new flight.
+            self._fence_land_triggered = False
+            self._fence_tier = "ok"
 
     def land(self) -> None:
         with self._lock:
@@ -512,7 +522,8 @@ class Drone:
         # djitellopy reads telemetry from a state UDP packet the drone
         # broadcasts ~10 Hz. The `get_*` accessors read from that cache and
         # do NOT send commands, so polling is cheap. Link-health metrics
-        # (packet loss, video errors, SNR, RTT) are merged in on top.
+        # (packet loss, video errors, SNR, RTT) are merged in on top, and
+        # the soft fence is evaluated against them.
         while not self._closed:
             time.sleep(0.2)  # 5 Hz
             try:
@@ -521,8 +532,9 @@ class Drone:
                 logger.debug("telemetry read failed: %s", exc)
                 continue
             link = self._compute_link()
+            tier = self._evaluate_fence(link)
             with self._lock:
-                self._last_telemetry = {**tele, **link}
+                self._last_telemetry = {**tele, **link, "link_fence": tier}
 
     def _wifi_loop(self) -> None:
         # Poll the SDK ``wifi?`` command at 1 Hz. Each poll yields both the
@@ -612,6 +624,114 @@ class Drone:
                 round(ms_since_state) if ms_since_state is not None else None
             ),
         }
+
+    # ------------------------------------------------------------------ #
+    # Soft geofence
+    #
+    # The original Tello has no GPS and no absolute position; we can't
+    # fence on distance from home. Instead we fence on the *link's*
+    # health, which is what actually decides whether commands will reach
+    # the drone. Three tiers, escalating in severity:
+    #
+    #   caution → just a UI warning, no behavior change
+    #   hover   → drone is commanded to (0,0,0,0) once on tier entry, then
+    #             the operator can still override with a fresh key press
+    #   land    → an automatic land() is dispatched once; latches until
+    #             the next takeoff so we don't keep firing it
+    #
+    # All thresholds are deliberately strict on entry — the LAND tier is
+    # essentially "no state packets for 3 seconds OR the link is so bad
+    # the drone is probably gone". Tune from real walk-out test data.
+    # ------------------------------------------------------------------ #
+
+    _FENCE_SNR_LAND     = 8
+    _FENCE_SNR_HOVER    = 12
+    _FENCE_SNR_CAUTION  = 20
+    _FENCE_LOSS_LAND    = 30.0
+    _FENCE_LOSS_HOVER   = 15.0
+    _FENCE_LOSS_CAUTION = 5.0
+    _FENCE_STALE_LAND   = 3000
+    _FENCE_STALE_HOVER  = 1000
+
+    def _classify_fence(self, link: dict[str, Any]) -> str:
+        snr  = link.get("wifi_snr_db")
+        loss = link.get("packet_loss_pct")
+        ms   = link.get("ms_since_state")
+
+        def hit(value: Optional[float], threshold: float, cmp: str) -> bool:
+            if value is None:
+                return False
+            return value < threshold if cmp == "<" else value > threshold
+
+        if (
+            hit(snr,  self._FENCE_SNR_LAND,    "<")
+            or hit(loss, self._FENCE_LOSS_LAND,    ">")
+            or hit(ms,   self._FENCE_STALE_LAND,   ">")
+        ):
+            return "land"
+        if (
+            hit(snr,  self._FENCE_SNR_HOVER,   "<")
+            or hit(loss, self._FENCE_LOSS_HOVER,   ">")
+            or hit(ms,   self._FENCE_STALE_HOVER,  ">")
+        ):
+            return "hover"
+        if (
+            hit(snr,  self._FENCE_SNR_CAUTION, "<")
+            or hit(loss, self._FENCE_LOSS_CAUTION, ">")
+        ):
+            return "caution"
+        return "ok"
+
+    def _evaluate_fence(self, link: dict[str, Any]) -> str:
+        new_tier = self._classify_fence(link)
+        prev_tier = self._fence_tier
+        if new_tier == prev_tier:
+            return new_tier
+
+        self._fence_tier = new_tier
+        # Side effects fire on tier *change* only. The operator can
+        # therefore re-pilot the drone after a fence-hover with a fresh
+        # key press; we do not re-zero on every tick.
+        if new_tier == "hover" and self._flying:
+            logger.warning("link fence: HOVER (prev=%s) — zeroing velocity", prev_tier)
+            with self._lock:
+                self._last_status = "FENCE HOVER (link degraded)"
+            try:
+                self.set_velocity(0, 0, 0, 0)
+            except Exception as exc:
+                logger.warning("fence hover set_velocity failed: %s", exc)
+        elif new_tier == "land" and self._flying and not self._fence_land_triggered:
+            self._fence_land_triggered = True
+            logger.warning("link fence: LAND (prev=%s) — auto-landing", prev_tier)
+            with self._lock:
+                self._last_status = "FENCE LAND (link lost, auto-landing)"
+            threading.Thread(
+                target=self._safe_fence_land,
+                name="tello-fence-land",
+                daemon=True,
+            ).start()
+        elif new_tier in ("ok", "caution") and prev_tier in ("hover", "land"):
+            logger.info("link fence: recovered to %s (was %s)", new_tier, prev_tier)
+            with self._lock:
+                self._last_status = f"FENCE {new_tier.upper()} (link recovered)"
+
+        return new_tier
+
+    def _safe_fence_land(self) -> None:
+        """Run the fence-triggered land on a worker thread.
+
+        ``land()`` is blocking and can take 5+ seconds; we do not want to
+        stall the telemetry loop while it completes. Falls back to a hard
+        ``emergency()`` motor cut if the controlled land itself fails.
+        """
+        try:
+            self.land()
+        except Exception as exc:
+            logger.warning("fence land() failed, cutting motors: %s", exc)
+            try:
+                self.emergency()
+            except Exception:
+                pass
 
     def _rc_loop(self) -> None:
         # Continuously forward the current velocity vector to the drone while

@@ -71,6 +71,7 @@ const els = {
     loss:     $("hud-loss"),
     rtt:      $("hud-rtt"),
     viderr:   $("hud-viderr"),
+    fence:    $("hud-fence"),
   },
   vel: {
     box:  $("vel-readout"),
@@ -88,6 +89,16 @@ const state = {
   flying: false,
   controlWs: null,
   emergency: false,
+  fenceTier: "ok",
+};
+
+// Human-readable label per fence tier, surfaced both on the HUD inset and
+// in the event log when the tier changes.
+const FENCE_LABELS = {
+  ok:      "link ok",
+  caution: "caution",
+  hover:   "auto-hover",
+  land:    "auto-land",
 };
 
 // Map data-hold-key value -> array of matching button elements, so we can
@@ -289,12 +300,27 @@ function mirrorHud(t) {
 
 // Paint the four link-health numbers into the bottom-right HUD inset.
 // All four can be null (server hasn't sampled yet, or the SDK 'wifi?'
-// query timed out) — render '—' so the inset doesn't flash blank.
+// query timed out) — render '—' so the inset doesn't flash blank. The
+// fence tier on the snapshot decides the border color and the status
+// line at the bottom of the inset.
 function paintLink(t) {
   setNum(els.hud.snr,    t.wifi_snr_db);
   setNum(els.hud.loss,   t.packet_loss_pct);
   setNum(els.hud.rtt,    t.link_rtt_ms);
   setNum(els.hud.viderr, t.video_errors_per_sec);
+
+  const tier = typeof t.link_fence === "string" ? t.link_fence : "ok";
+  if (els.hud.linkq) els.hud.linkq.dataset.fence = tier;
+  if (els.hud.fence) els.hud.fence.textContent = FENCE_LABELS[tier] || tier;
+
+  if (tier !== state.fenceTier) {
+    const prev = state.fenceTier;
+    state.fenceTier = tier;
+    const lvl = (tier === "land" || tier === "hover") ? "error"
+              : (tier === "caution") ? "warn"
+              : "info";
+    log(lvl, `link fence: ${prev} -> ${tier}`);
+  }
 }
 
 // ----------------------- control WebSocket --------------------------- //
