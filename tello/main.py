@@ -27,12 +27,12 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
+from drone import Drone, VALID_FLIP_DIRECTIONS
+
 import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-
-from drone import Drone, VALID_FLIP_DIRECTIONS
 
 logging.basicConfig(
     level=logging.INFO,

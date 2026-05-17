@@ -36,8 +36,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+import numpy as np
 import av as _av
 from djitellopy import Tello
+from djitellopy.tello import BackgroundFrameRead, TelloException
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +53,18 @@ logger = logging.getLogger(__name__)
 # of latency to the dashboard video. We monkey-patch ``av.open`` exactly once
 # at import time to inject low-delay options whenever the URL is a UDP stream.
 # Non-UDP callers are unaffected.
+#
+# A *small* ``probesize`` breaks H.264 on UDP: the demuxer never sees enough of
+# the stream to pick up SPS/PPS, and ``av.codec`` raises ``InvalidDataError``
+# on the first packets. Keep probe/analyze large enough for extradata, while
+# still using ``nobuffer`` / ``low_delay`` for live view latency.
 # --------------------------------------------------------------------------- #
 
 _LOW_LATENCY_OPTIONS = {
-    "fflags": "nobuffer",
+    "fflags": "nobuffer+discardcorrupt",
     "flags": "low_delay",
-    "probesize": "32",
-    "analyzeduration": "0",
+    "probesize": "5000000",
+    "analyzeduration": "1000000",
     "max_delay": "0",
 }
 
@@ -76,6 +83,37 @@ def _patched_av_open(file=None, *args, **kwargs):
 
 if getattr(_av.open, "__name__", "") != "_patched_av_open":
     _av.open = _patched_av_open
+
+
+def _patch_resilient_video_decode() -> None:
+    """djitellopy's frame loop uses ``container.decode()``; a single bad H.264
+    packet kills the worker thread. Demux packet-by-packet and skip corrupt
+    NAL units so the feed recovers."""
+
+    def update_frame(self) -> None:
+        try:
+            for packet in self.container.demux(video=0):
+                if self.stopped:
+                    self.container.close()
+                    break
+                try:
+                    for frame in packet.decode():
+                        if self.with_queue:
+                            self.frames.append(np.array(frame.to_image()))
+                        else:
+                            self.frame = np.array(frame.to_image())
+                except _av.error.InvalidDataError:
+                    continue
+        except _av.error.ExitError:
+            raise TelloException(
+                "Do not have enough frames for decoding, please try again "
+                "or increase video fps before get_frame_read()"
+            )
+
+    BackgroundFrameRead.update_frame = update_frame  # type: ignore[assignment]
+
+
+_patch_resilient_video_decode()
 
 
 # --------------------------------------------------------------------------- #

@@ -17,11 +17,11 @@ import sys
 import time
 from pathlib import Path
 
-import cv2
-
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from drone import Drone  # noqa: E402
+
+import cv2
 
 
 WINDOW_TITLE = "Tello video (q to quit)"
