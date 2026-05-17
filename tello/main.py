@@ -84,7 +84,14 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.post("/api/connect")
 async def api_connect() -> dict[str, Any]:
-    """Connect to the Tello and start the video stream. Idempotent."""
+    """Connect to the Tello and start the video stream. Idempotent.
+
+    The response also carries ``link_diagnostics`` — a dict of bool flags
+    confirming that the link-safety monkey-patches applied and the
+    background threads are alive. The dashboard surfaces any False entry
+    in the event log so a regression here is visible immediately rather
+    than during flight.
+    """
 
     def _do() -> dict[str, Any]:
         snap = drone.snapshot()
@@ -93,7 +100,10 @@ async def api_connect() -> dict[str, Any]:
         if not drone.snapshot().streaming:
             drone.start_stream()
         drone.clear_error()
-        return asdict(drone.snapshot())
+        return {
+            **asdict(drone.snapshot()),
+            "link_diagnostics": drone.link_diagnostics(),
+        }
 
     try:
         return await asyncio.to_thread(_do)

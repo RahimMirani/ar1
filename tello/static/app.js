@@ -466,12 +466,29 @@ els.connect.addEventListener("click", async () => {
     const data = await res.json();
     if (data.error) log("error", data.error);
     else log("info", "connect ok");
+    reportLinkDiagnostics(data.link_diagnostics);
   } catch (err) {
     log("error", `connect failed: ${err}`);
   } finally {
     els.connect.disabled = false;
   }
 });
+
+// Surface any failed link-safety check in the event log. On a healthy
+// connect everything is true and we stay silent. A False entry means a
+// monkey-patch did not apply or a background thread did not start — a
+// regression introduced by an edit to drone.py.
+function reportLinkDiagnostics(diag) {
+  if (!diag || typeof diag !== "object") return;
+  const failed = Object.entries(diag)
+    .filter(([, ok]) => ok === false)
+    .map(([name]) => name);
+  if (failed.length === 0) {
+    log("info", "link safety checks: all pass");
+  } else {
+    log("error", `link safety degraded: ${failed.join(", ")}`);
+  }
+}
 
 els.disconnect.addEventListener("click", async () => {
   log("info", "disconnecting...");

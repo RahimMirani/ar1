@@ -17,6 +17,84 @@ Two control modes coexist:
   ``ok`` only after physically completing the move. Convenient for
   scripted waypoints but unsuitable for live teleop.
 
+============================================================================
+LINK SAFETY INVARIANTS — read this before editing
+============================================================================
+
+The dashboard's responsiveness and the soft geofence both depend on a small
+set of invariants below. Each was added because we hit the broken case in
+real flight testing, and they have non-obvious interactions. If you change
+any one of them in isolation, you will probably re-introduce a regression
+that looks like "the controls don't work" or "the drone takes ages to
+respond". Run ``python tello/scripts/smoke_link.py`` after any edit here.
+
+1. **Three module-level monkey-patches must apply at import.**
+
+   * ``_patch_command_serialization`` wraps ``Tello.send_command_with_return``
+     in ``_command_send_lock``. Without this the wifi-polling thread races
+     the operator's takeoff/land/flip thread on djitellopy's single response
+     queue — replies get popped by the wrong thread, commands time out and
+     retry, and SNR readings get stuck on stale values.
+   * ``_patch_state_packet_counter`` wraps ``Tello.parse_state`` to count
+     incoming state packets. The packet-loss metric and the fence's
+     ``ms_since_state`` trigger both depend on this counter.
+   * ``_patch_resilient_video_decode`` replaces ``BackgroundFrameRead.update_frame``
+     so a single corrupt H.264 packet doesn't kill the video thread, and
+     counts decode errors into ``_video_errors_total`` for the HUD.
+
+   Each patch sets a ``_*_patched`` flag we assert at the bottom of the
+   patching block. If you re-order imports or upgrade djitellopy in a way
+   that prevents these from applying, the import will raise — fail-fast is
+   the goal.
+
+2. **RC velocity must stay on the fire-and-forget SDK path.**
+
+   :meth:`set_velocity` calls ``self._tello.send_rc_control(...)`` which
+   uses djitellopy's ``send_command_without_return`` — no response queue,
+   no waiting. *Do not* "simplify" it to ``send_control_command`` or any
+   ``query_*`` method. Doing so would route every keypress through the
+   lock, add the wifi-poll RTT to your control latency, and create deadlock
+   risk against the fence's own ``set_velocity`` call.
+
+3. **Fence tuning constants are interdependent.**
+
+   These four numbers form one coupled system:
+
+   * ``self._link_history`` has ``maxlen=25`` and is sampled at 5 Hz from
+     ``_telemetry_loop`` → 5-second rolling window.
+   * ``_LINK_WARMUP_SEC = 3.0`` — packet_loss_pct is suppressed until the
+     window has at least this much data, otherwise short-window jitter
+     reads as 20-30% "loss" on a healthy link.
+   * ``_FENCE_DEBOUNCE_SEC = 1.0`` — non-LAND tier changes must hold steady
+     for this long before committing. Filters single-tick jitter that
+     would otherwise flick HOVER for one frame and stomp on the operator's
+     velocity vector.
+   * ``_FENCE_LOSS_HOVER`` / ``_FENCE_STALE_HOVER`` — the trigger
+     thresholds. Reducing them without widening the window or increasing
+     the debounce will re-introduce false HOVER triggers on a clean link.
+
+   If you change the telemetry rate, you must also re-pick ``maxlen``,
+   warmup, and debounce together. The smoke test catches most of these
+   regressions but not all combinations.
+
+4. **The packet-history clear on takeoff is load-bearing.**
+
+   :meth:`takeoff` calls ``self._link_history.clear()`` because the Tello
+   briefly pauses state broadcasts during motor spin-up. Without the clear
+   that pause shows up as ~20% packet loss for the first 5 seconds of
+   the flight, which can trip the HOVER tier before the drone is even
+   fully airborne.
+
+5. **The fence's HOVER override is one-shot per tier entry.**
+
+   :meth:`_apply_fence_transition` fires ``set_velocity(0,0,0,0)`` exactly
+   once when HOVER is *first entered* (after debounce). The operator can
+   then re-pilot with a fresh keypress — the dashboard JS only sends new
+   velocity packets on key-state change, so a held key won't push past
+   the override. *Do not* call ``set_velocity`` on every tick HOVER is
+   active; that would make the drone permanently un-flyable until the
+   link recovers, even on transient degradation.
+
 Conventions
 -----------
 * Translation velocity components ``lr``, ``fb``, ``ud`` and ``yaw`` are
@@ -86,6 +164,10 @@ _command_lock_patched = False
 
 
 def _patch_command_serialization() -> None:
+    # DO NOT REMOVE — see LINK SAFETY INVARIANTS §1 in the module docstring.
+    # Without this lock, the wifi poller and operator commands race on
+    # djitellopy's response queue and the dashboard feels broken on
+    # takeoff. Run smoke_link.py if you touch this.
     global _command_lock_patched
     if _command_lock_patched:
         return
@@ -108,6 +190,11 @@ _state_counter_patched = False
 
 def _patch_state_packet_counter() -> None:
     """Monkey-patch ``Tello.parse_state`` to count incoming state packets.
+
+    DO NOT REMOVE — see LINK SAFETY INVARIANTS §1. The packet-loss metric
+    and the fence's ``ms_since_state`` trigger both read from this counter;
+    if it stops incrementing the fence will eventually auto-land on a
+    perfectly healthy drone.
 
     The Tello broadcasts state at ~10 Hz on UDP 8890; djitellopy's static
     ``udp_state_receiver`` thread calls ``parse_state`` once per packet. By
@@ -182,12 +269,19 @@ if getattr(_av.open, "__name__", "") != "_patched_av_open":
     _av.open = _patched_av_open
 
 
+_video_decode_patched = False
+
+
 def _patch_resilient_video_decode() -> None:
     """djitellopy's frame loop uses ``container.decode()``; a single bad H.264
     packet kills the worker thread. Demux packet-by-packet and skip corrupt
     NAL units so the feed recovers. Each skipped (corrupt) frame is counted
     in ``_video_errors_total`` — the rate of these is a sensitive proxy for
     a degrading WiFi link, often visible before the command channel breaks.
+
+    DO NOT REMOVE — see LINK SAFETY INVARIANTS §1. Without this patch the
+    video thread silently dies on the first corrupt H.264 NAL unit (which
+    happens routinely on a 2.4 GHz WiFi link) and the dashboard goes dark.
     """
 
     def update_frame(self) -> None:
@@ -214,9 +308,23 @@ def _patch_resilient_video_decode() -> None:
             )
 
     BackgroundFrameRead.update_frame = update_frame  # type: ignore[assignment]
+    global _video_decode_patched
+    _video_decode_patched = True
 
 
 _patch_resilient_video_decode()
+
+
+# Fail fast at import if any of the three link-safety patches did not apply
+# (e.g. a djitellopy upgrade changed the function name). Catching this at
+# import is much cheaper than catching it during a flight test.
+if not (_command_lock_patched and _state_counter_patched and _video_decode_patched):
+    raise RuntimeError(
+        "tello.drone: one or more link-safety monkey-patches did not apply "
+        f"(command_lock={_command_lock_patched}, state_counter={_state_counter_patched}, "
+        f"video_decode={_video_decode_patched}). See LINK SAFETY INVARIANTS §1 "
+        "in the module docstring."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -315,6 +423,9 @@ class Drone:
         # state packets arrive with enough jitter that a 2 s window shows
         # spurious 20-30% "loss" even on a perfectly healthy link, which
         # would constantly trip the fence.
+        #
+        # DO NOT reduce maxlen without also raising _LINK_WARMUP_SEC and
+        # _FENCE_DEBOUNCE_SEC — see LINK SAFETY INVARIANTS §3.
         self._link_history: deque[tuple[float, int, int]] = deque(maxlen=25)
 
         # Soft geofence tier — evaluated on every telemetry tick from the
@@ -374,6 +485,15 @@ class Drone:
             self._last_status = "CONNECTED"
             self._last_error = None
         self._start_background_threads()
+        # Confirm the link-safety scaffolding came up cleanly. Logging
+        # this on every connect gives us a visible signal if a future
+        # edit breaks one of the monkey-patches or stops a thread from
+        # starting — far easier to spot here than at flight time.
+        diag = self.link_diagnostics()
+        if all(diag.values()):
+            logger.info("link safety: all checks passing %s", diag)
+        else:
+            logger.warning("link safety: degraded — %s", diag)
 
     def start_stream(self) -> None:
         with self._lock:
@@ -428,6 +548,11 @@ class Drone:
             # history — state broadcasts pause briefly during takeoff and
             # we don't want those gaps polluting the new flight's loss
             # window.
+            #
+            # DO NOT drop the ``_link_history.clear()`` — without it the
+            # motor-spin-up pause reads as ~20% loss for the first 5 s of
+            # flight and trips HOVER before the drone is fully airborne.
+            # See LINK SAFETY INVARIANTS §4.
             self._fence_land_triggered = False
             self._fence_tier = "ok"
             self._fence_pending_tier = "ok"
@@ -481,6 +606,11 @@ class Drone:
         # Fire one packet immediately so the drone reacts without waiting for
         # the next 20 Hz tick. djitellopy rate-limits internally, so this is
         # safe to call frequently.
+        #
+        # DO NOT swap ``send_rc_control`` for any ``send_control_command`` /
+        # ``query_*`` variant — those wait for an ack and would route every
+        # keypress through the command-serialization lock, adding the
+        # wifi-poll RTT to your control latency. See LINK SAFETY §2.
         if self._flying and not self._closed:
             try:
                 self._tello.send_rc_control(lr, fb, ud, yaw)
@@ -543,6 +673,25 @@ class Drone:
     def clear_error(self) -> None:
         with self._lock:
             self._last_error = None
+
+    def link_diagnostics(self) -> dict[str, bool]:
+        """Report whether the link-safety scaffolding came up cleanly.
+
+        Returns a dict of bool flags for each of the three monkey-patches
+        and each of the three background threads. ``all(values)`` should
+        be True on a healthy connect; anything False indicates a
+        regression in the patching or thread startup logic, almost
+        certainly introduced by an edit to this module. See LINK SAFETY
+        INVARIANTS in the module docstring for what each one guards.
+        """
+        return {
+            "command_lock_patched":   _command_lock_patched,
+            "state_counter_patched":  _state_counter_patched,
+            "video_decode_patched":   _video_decode_patched,
+            "telemetry_thread_alive": bool(self._telemetry_thread and self._telemetry_thread.is_alive()),
+            "rc_thread_alive":        bool(self._rc_thread and self._rc_thread.is_alive()),
+            "wifi_thread_alive":      bool(self._wifi_thread and self._wifi_thread.is_alive()),
+        }
 
     # ------------------------------------------------------------------ #
     # Internals
@@ -703,17 +852,36 @@ class Drone:
     # the drone is probably gone". Tune from real walk-out test data.
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # Fence tuning — these eight numbers form ONE coupled system. Do not
+    # change any of them in isolation; re-run ``scripts/smoke_link.py``
+    # after edits. See LINK SAFETY INVARIANTS §3 in the module docstring.
+    # ------------------------------------------------------------------ #
+
+    # SNR (dB) thresholds — lower is worse. Tello firmware reports SNR
+    # in a sticky way: tends to sit near 90 then drop sharply near the
+    # edge of range. CAUTION/HOVER on SNR rarely fire on real Tellos.
     _FENCE_SNR_LAND     = 8
     _FENCE_SNR_HOVER    = 12
     _FENCE_SNR_CAUTION  = 20
+
+    # Packet-loss (%) thresholds — derived from the rolling 5 s state-
+    # packet rate. These are the most sensitive triggers in practice.
+    # Reducing them without widening the history window will re-introduce
+    # false HOVER triggers on a healthy link.
     _FENCE_LOSS_LAND    = 30.0
     _FENCE_LOSS_HOVER   = 15.0
     _FENCE_LOSS_CAUTION = 5.0
+
+    # Age (ms) of the last received state packet. State arrives ~10 Hz
+    # nominally, so a 1 s gap is genuinely abnormal.
     _FENCE_STALE_LAND   = 3000
     _FENCE_STALE_HOVER  = 1000
 
     # Minimum seconds of history before packet_loss_pct is reported; below
-    # this the rolling average is too noisy to fence on.
+    # this the rolling average is too noisy to fence on. Coupled with the
+    # ``_link_history`` maxlen — both must change together if you alter
+    # the telemetry rate.
     _LINK_WARMUP_SEC    = 3.0
 
     # Sustained-tick window before a candidate tier commits. Filters out
