@@ -43,16 +43,26 @@ product.
   and discrete distance commands for the agent.
 - **FastAPI server** (`tello/main.py`) — WebSocket telemetry + control,
   MJPEG video, static dashboard. The browser is the operator interface.
-- **Operator console** (`tello/static/`) — vanilla HTML/CSS/JS, Inter
-  typeface, flat dark theme with restrained amber accents. Live video with
-  glass HUD insets (callsign + altitude / battery / flight-time, link-feed-
-  airborne state, live velocity vector). Topbar mission pill (idle / armed
-  / flight / emergency) and indicator dots. Side pane: connection card,
+- **Operator console** (`/`) — vanilla HTML/CSS/JS, Inter typeface, flat
+  dark theme with restrained amber accents. Live video with glass HUD
+  insets (callsign + altitude / battery / flight-time, link-feed-airborne
+  state, live velocity vector). Topbar mission pill (idle / armed /
+  flight / emergency) and indicator dots. Side pane: connection card,
   telemetry card with prominent battery bar, flight card, motion pad with
-  hold-to-fly buttons and live velocity readout, flips card. Bottom: event
-  log. Will gain alarm / agent-reasoning / vision-thumbnail / notification
-  panels in upcoming phases — added as new side-pane cards and a banner
-  zone, in the same visual language.
+  hold-to-fly buttons and live velocity readout, flips card. Bottom:
+  event log. Will gain alarm / agent-reasoning / vision-thumbnail /
+  notification panels in upcoming phases — added as new side-pane cards
+  and a banner zone, in the same visual language.
+- **Dispatcher dashboard** (`/dashboard`) — separate page served by the
+  same FastAPI app, subscribing to the same WebSocket events. This is
+  what the **fire department sees in real time** when they receive a
+  notification: read-only, no controls, designed for a station screen or
+  a firefighter's phone. Same flat dark / amber visual language as the
+  operator console but laid out for storytelling at a glance — large
+  full-bleed live video, prominent alarm banner, agent reasoning
+  streamed in large readable type, vision thumbnails as a filmstrip, and
+  the verdict banner taking over half the screen at decision time. Lands
+  in Phase E.
 
 ## Networking
 
@@ -79,10 +89,11 @@ dropped even with explicit firewall allow rules.
    │          ▼  │
    │       main.py (FastAPI: WS + MJPEG + REST)
    │              │
-   │     ┌────────┴────────┐
-   │     ▼                 ▼
-   └──► dashboard      notifier (simulated fire-dept alert)
-        (browser)
+   │     ┌────────┴────────────────────────┐
+   │     ▼                                 ▼
+   └──► browser views                  notifier (incident event)
+        ├─ /          operator console
+        └─ /dashboard dispatcher view (firefighters)
 ```
 
 ## Tech choices
@@ -216,11 +227,14 @@ Audio event from Phase B fires the Phase C agent. Dashboard shows the
 full pipeline live: audio spike → alarm badge → agent active → reasoning
 stream → vision thumbnails → drone moves → classification.
 
-### Phase E — Notification + polish
+### Phase E — Notification + dispatcher dashboard + polish
 
-`tello/notifier.py`: structured incident events published over WebSocket.
-A new banner zone in the operator console (above the video) renders the
-outcome in the same flat dark / amber language as the rest of the UI:
+Two deliverables.
+
+**1. `tello/notifier.py`** — structured incident events published over
+WebSocket. A new banner zone in the operator console (above the video)
+renders the outcome in the same flat dark / amber language as the rest
+of the UI:
 
 - **Real fire** → red-bordered banner: "FIRE DEPARTMENT NOTIFIED",
   severity (low / medium / high), one-line description, timestamp, the
@@ -233,10 +247,33 @@ outcome in the same flat dark / amber language as the rest of the UI:
 Both outcomes also append a permanent incident entry to the event log so
 the operator can scroll the history. Twilio SMS as a stretch.
 
+**2. Dispatcher dashboard at `/dashboard`** — a second HTML page served by
+the same FastAPI app, framed as the **firefighter's real-time view of an
+in-progress incident**. Same `/ws/telemetry` + agent + notification
+events as the operator console, rendered for an audience instead of an
+operator:
+
+- Full-bleed live video as the hero
+- Alarm-detected banner across the top when active
+- Agent reasoning streaming in large readable type beside the video
+- Vision-call thumbnails as a horizontal filmstrip with their JSON
+  results
+- Drone state strip (battery / altitude / flight time) — read-only, no
+  control surface
+- At verdict time the notification banner takes over half the screen
+  for ~3 s, then settles into the corner so the post-mortem detail
+  stays visible
+
+Implemented as `tello/static/dashboard.html` + `dashboard.css` +
+`dashboard.js` in the same visual language as the operator console.
+Demo posture: project `/dashboard` on a TV or second screen while the
+operator flies from `/` on the laptop.
+
 ## Demo flow
 
-1. Tello on the floor, laptop on Tello WiFi + USB ethernet, operator
-   console open. Mission pill = idle.
+1. Tello on the floor, laptop on Tello WiFi + USB ethernet. **Operator
+   console** open on the laptop, **`/dashboard`** projected on a second
+   screen / TV as the firefighter view. Mission pill = idle.
 2. Play a fire-alarm clip through a speaker.
 3. Audio detector lights the alarm badge; mission pill flips to **armed**.
 4. Agent kicks off; reasoning streams into a new agent card:
