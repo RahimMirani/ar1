@@ -4,13 +4,23 @@
 
 An autonomous fire-response drone agent. When a fire alarm sounds in the
 house, the drone arms, flies a quick inspection of the room via its camera,
-and decides whether it's a **real fire** or a **false alarm**. If real, it
-sends a notification (simulated fire-department alert on the dashboard). If
-false, it logs the incident and lands.
+and decides whether it's a **real fire** or a **false alarm**. Either way
+a notification is sent:
+
+- **Real fire** → simulated fire-department alert with severity,
+  description, and the thumbnail of the deciding camera frame.
+- **False alarm** → "alarm cleared" notification with the **reason**
+  (cooking steam, sunlight, sensor fault, candle, etc.), the full
+  agent-authored explanation of what it observed, and the supporting
+  thumbnails. The false-alarm notification is just as detailed as the
+  real-fire one — it's the audit trail.
+
+Then the drone lands.
 
 The pitch is the **false-alarm filter**: most residential fire-alarm trips
 are false, and dispatching a truck is expensive. An autonomous agent that
-verifies before escalating is the product.
+verifies before escalating, *and explains its reasoning either way*, is the
+product.
 
 ## Hardware
 
@@ -33,9 +43,16 @@ verifies before escalating is the product.
   and discrete distance commands for the agent.
 - **FastAPI server** (`tello/main.py`) — WebSocket telemetry + control,
   MJPEG video, static dashboard. The browser is the operator interface.
-- **Web dashboard** (`tello/static/`) — vanilla HTML/CSS/JS. Live video,
-  telemetry, hold-to-fly controls, event log. Will host the agent + audio +
-  vision panels in upcoming phases.
+- **Operator console** (`tello/static/`) — vanilla HTML/CSS/JS, Inter
+  typeface, flat dark theme with restrained amber accents. Live video with
+  glass HUD insets (callsign + altitude / battery / flight-time, link-feed-
+  airborne state, live velocity vector). Topbar mission pill (idle / armed
+  / flight / emergency) and indicator dots. Side pane: connection card,
+  telemetry card with prominent battery bar, flight card, motion pad with
+  hold-to-fly buttons and live velocity readout, flips card. Bottom: event
+  log. Will gain alarm / agent-reasoning / vision-thumbnail / notification
+  panels in upcoming phases — added as new side-pane cards and a banner
+  zone, in the same visual language.
 
 ## Networking
 
@@ -102,9 +119,14 @@ Bench-tested and pushed to `main`:
   H.264 demux (skip corrupt NAL units without killing the worker).
 - Discrete `move()` / `rotate()` / `flip()` methods preserved on the
   `Drone` for the agent to call.
-- Dashboard: live video, telemetry grid (battery / height / yaw / pitch /
-  roll / speeds / temp), connect-disconnect, takeoff / land / flips,
-  scrolling event log.
+- Operator console: flat dark UI in Inter, amber-on-active accents.
+  Topbar with mission-state pill + link/feed/air indicator dots +
+  emergency-stop. Video pane with three glass HUD insets (callsign +
+  battery / altitude / time; live link-feed-airborne state; live
+  velocity vector). Side pane with connection, telemetry (battery bar +
+  full grid), flight, motion (WASD / Space-Shift / QE hold-to-fly with
+  live velocity readout), and flips cards. Scrolling event log along the
+  bottom.
 
 ## Plan of action (next)
 
@@ -196,23 +218,42 @@ stream → vision thumbnails → drone moves → classification.
 
 ### Phase E — Notification + polish
 
-`tello/notifier.py`: a simulated fire-department alert. Dashboard banner
-turns red with severity + description on real fire; gray "FALSE ALARM
-LOGGED" on no-fire. Demo flow refinement. Twilio SMS as a stretch.
+`tello/notifier.py`: structured incident events published over WebSocket.
+A new banner zone in the operator console (above the video) renders the
+outcome in the same flat dark / amber language as the rest of the UI:
+
+- **Real fire** → red-bordered banner: "FIRE DEPARTMENT NOTIFIED",
+  severity (low / medium / high), one-line description, timestamp, the
+  thumbnail of the frame the agent classified on, and the agent's
+  reasoning excerpt.
+- **False alarm** → amber-bordered banner: "ALARM CLEARED", the reason
+  category (cooking, steam, sunlight, sensor fault, candle, other), the
+  agent's full explanation, the same thumbnail + reasoning excerpt.
+
+Both outcomes also append a permanent incident entry to the event log so
+the operator can scroll the history. Twilio SMS as a stretch.
 
 ## Demo flow
 
-1. Tello on the floor, laptop on Tello WiFi + USB ethernet, dashboard open.
+1. Tello on the floor, laptop on Tello WiFi + USB ethernet, operator
+   console open. Mission pill = idle.
 2. Play a fire-alarm clip through a speaker.
-3. Audio detector lights the alarm badge on the dashboard.
-4. Agent kicks off; reasoning streams to the dashboard:
-   *"Fire alarm detected. Initiating inspection. Examining current view..."*
-5. Drone takes off, rotates to inspect (a couple of yaw + short moves in
-   the room).
-6. Each vision call shows a thumbnail + structured JSON on the dashboard.
-7. Agent classifies: real fire → red banner with simulated dispatch
-   message; false alarm → gray log entry.
-8. Drone lands. Operator `Esc` available throughout as the kill switch.
+3. Audio detector lights the alarm badge; mission pill flips to **armed**.
+4. Agent kicks off; reasoning streams into a new agent card:
+   *"Fire alarm detected. Initiating inspection. Examining current view…"*
+5. Drone takes off (mission pill flips to **flight**), rotates and steps
+   through a short inspection pattern. HUD insets update live.
+6. Each vision call drops a thumbnail + structured JSON into the agent
+   card. Perception layer's path-clear checks log alongside.
+7. Agent reaches a verdict and calls the terminal tool:
+   - **Real fire** → red "FIRE DEPARTMENT NOTIFIED" banner appears above
+     the video with severity, description, and thumbnail. Event log
+     gains a permanent INCIDENT entry.
+   - **False alarm** → amber "ALARM CLEARED" banner with the reason
+     category and the full agent explanation. Same permanent event-log
+     entry.
+8. Drone lands; mission pill returns to **idle**. Operator `Esc` was
+   available throughout as the kill switch.
 
 ## Cut-scope priority (if behind)
 
