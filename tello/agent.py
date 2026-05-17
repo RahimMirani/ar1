@@ -9,7 +9,7 @@ The agent runs in three constrained ways:
 * **One mission at a time.** A process-wide lock prevents concurrent
   ``run_mission`` calls. The audio auto-trigger and the manual
   "Activate agent" button both go through the same gate.
-* **Hard wall-clock cap.** ``MISSION_BUDGET_SEC`` (default 90 s) is
+* **Hard wall-clock cap.** ``MISSION_BUDGET_SEC`` (default 180 s) is
   enforced via ``asyncio.wait_for`` around the streamed run. On timeout
   we force-land and emit an error verdict — the drone never just hovers.
 * **Single verdict.** The agent must call ``report_finding`` exactly
@@ -49,12 +49,16 @@ logger = logging.getLogger("tello.agent")
 
 # Plain module-level constants. The agent model is what does the
 # reasoning + tool-calling for the autonomous mission; gpt-4o is the
-# best trade-off of tool-call reliability and latency we have. Mission
-# budget and max-turns are tuned together (~5-6 s per turn worst case
-# leaves headroom inside the 90 s cap).
+# best trade-off of tool-call reliability and latency we have.
+#
+# Mission budget + max-turns are sized for *exploratory* missions: a
+# typical roam pattern is takeoff + 3-4 (move, analyze, rotate, analyze)
+# sequences + land + report, which lands around 18-24 LLM turns and
+# 90-150 s of wall clock. 180 s and 28 turns give us a comfortable
+# margin without letting the drone wander indefinitely.
 AGENT_MODEL = "gpt-4o"
-MISSION_BUDGET_SEC = float(os.getenv("FIREDRONE_AGENT_BUDGET_SEC", "90"))
-MAX_TURNS = int(os.getenv("FIREDRONE_AGENT_MAX_TURNS", "16"))
+MISSION_BUDGET_SEC = float(os.getenv("FIREDRONE_AGENT_BUDGET_SEC", "180"))
+MAX_TURNS = int(os.getenv("FIREDRONE_AGENT_MAX_TURNS", "28"))
 
 VALID_VERDICTS = {"real_fire", "false_alarm", "unknown"}
 
@@ -231,18 +235,37 @@ def rotate(degrees: int) -> str:
 
 @function_tool
 def move(direction: str, distance_cm: int) -> str:
-    """Move in a discrete step. For 'forward' this *also* runs a depth
-    check first and refuses if the path is blocked.
+    """Move in a discrete step. For lateral directions this *also* runs
+    a depth check first and refuses if the path is blocked.
 
     direction: 'forward' | 'back' | 'left' | 'right' | 'up' | 'down'.
-    distance_cm: 20-100 (small steps; we're indoors)."""
+    distance_cm: 20-200 — bigger steps cover the room faster; pick
+    100-200 for roaming, 20-60 for fine inspection."""
     def body() -> str:
         if _drone is None:
             return "ERROR: drone not configured"
         d = direction.strip().lower()
         if d not in {"forward", "back", "left", "right", "up", "down"}:
             return f"ERROR: bad direction {direction!r}"
-        cm = max(20, min(100, int(distance_cm)))
+        cm = max(20, min(200, int(distance_cm)))
+
+        # Floor guard: refuse "down" when we're already close to the
+        # ground. tof_cm is the downward time-of-flight reading on the
+        # Tello and is reliable below ~120 cm. The cap below leaves a
+        # ~20-30 cm safety margin under the worst-case step.
+        if d == "down":
+            tof = _drone.snapshot().telemetry.get("tof_cm")
+            if isinstance(tof, (int, float)) and tof - cm < 40:
+                return (
+                    f"REFUSED: moving down {cm} cm would put altitude "
+                    f"below safe floor (current tof {tof} cm). "
+                    "Stay at this altitude or go up."
+                )
+
+        # Depth check on motion that brings new scenery in front of the
+        # camera. (Back/up/down all show the same scene the camera was
+        # already pointing at, so a MiDaS check is uninformative for
+        # those.)
         if d in {"forward", "left", "right"}:
             frame = _drone.get_frame()
             if frame is not None:
@@ -250,7 +273,8 @@ def move(direction: str, distance_cm: int) -> str:
                 if check.available and not check.clear:
                     return (
                         f"REFUSED: depth check says {d} is blocked "
-                        f"(obstacle ratio {check.obstacle_ratio:.0%}). Try a different direction."
+                        f"(obstacle ratio {check.obstacle_ratio:.0%}). "
+                        "Try a different direction or rotate first."
                     )
         _drone.move(d, cm)
         return f"OK - moved {d} {cm} cm."
@@ -357,47 +381,78 @@ def report_finding(verdict: str, summary: str, reasons: list[str]) -> str:
 # --------------------------------------------------------------------------- #
 
 
-SYSTEM_PROMPT = """You are FireDroneAgent — an autonomous response drone in
-charge of investigating a fire alarm. The drone is a DJI Tello hovering
-in someone's home or small office.
+SYSTEM_PROMPT = """You are FireDroneAgent — an autonomous fire-response drone
+investigating an alarm. The drone is a DJI Tello operating indoors in a home or
+small office.
 
-Mission shape (follow it; deviate only with reason):
+Treat this like an actual search, not a stationary check: don't just rotate
+where you are — *go look*. Your operational radius is about 5 metres from the
+takeoff point. Visit at least **three distinct positions** in the space and
+inspect each from 2-3 angles before submitting a verdict. The point of the
+mission is to confidently say "I checked everywhere reasonable and saw X" —
+that's only credible if you actually moved through the room.
 
-  1. Call `takeoff` once.
-  2. Sweep the room: at least 3 separate `analyze_view` captures spaced
-     by ~90 deg rotations (use `rotate(90)` or `rotate(-90)`). Optionally
-     `move("forward", 40-60)` to get closer to any suspicious area, but
-     only after `check_path_clear("forward")` reports clear.
-  3. Decide:
-       * real_fire  -> any analyze_view came back fire_visible=true with
-                       confidence >= 0.55, OR severity == "high".
-       * false_alarm -> all captures clean OR low-severity false-positive
-                       triggers (lamps, screens, decor) are obvious.
-       * unknown   -> only as a last resort.
-  4. Call `land`.
-  5. Call `report_finding` ONCE with verdict, a 1-2 sentence summary, and
-     2-5 short reasons that reference the actual visual cues you saw.
-  6. Return a final one-sentence closing message.
+Mission shape (a template — adapt to what the space looks like):
+
+  1. `takeoff()`. You're now hovering about 80-100 cm above the floor.
+  2. **Initial scan from takeoff position.** Call `analyze_view()`. If it
+     comes back fire_visible=true with confidence >= 0.6, fast-track to
+     report — do one corroborating capture from a different angle, then land
+     and report real_fire.
+  3. **Patrol outward.** Pick a direction (start with what the camera sees).
+     Call `check_path_clear("forward")` — if clear, `move("forward", 120-200)`.
+     Otherwise rotate 45-90 deg and try again. At the new position call
+     `analyze_view()`. Then `rotate(90)` and analyze again to cover the side
+     you couldn't see from the previous spot.
+  4. **Visit at least two more distinct positions.** Good shapes:
+       * Triangle: forward 150 -> rotate 120 -> forward 150 -> rotate 120
+                   -> forward 150 (which brings you back near start).
+       * Four-corner: forward 150, rotate 90, forward 150, rotate 90,
+                      forward 150, rotate 90, forward 150 — back to origin.
+       * Hallway probe: forward 200, analyze, rotate 180, forward 200, analyze.
+     Always `check_path_clear` before a forward step. If REFUSED, treat it as
+     useful information — that direction has a wall or obstacle. Pick another.
+  5. **Return**: rotate roughly back toward your start so the operator's
+     orientation makes sense, then `land()`.
+  6. Call `report_finding(verdict, summary, reasons)` exactly once.
+  7. One short closing sentence is enough.
+
+Decision rules:
+
+  * real_fire   — *two or more* `analyze_view` results agree on
+                  fire_visible=true with confidence >= 0.55, OR any single
+                  result shows severity == "high". The "two or more" rule is
+                  the conservative bias: indoor false-positive triggers
+                  (red curtains, sunset light, computer screens, candle
+                  flames, LED strips) are extremely common, so we want
+                  corroboration from different angles before paging the
+                  fire department.
+  * false_alarm — all captures came back clean, OR you can name the
+                  specific innocent thing that fooled the alarm (a candle,
+                  a kitchen-screen glow, etc).
+  * unknown     — last resort. Only when vision repeatedly errored or you
+                  genuinely cannot decide after a full patrol.
 
 Hard rules:
 
-  * You have one wall-clock budget for the whole mission. Be deliberate
-    but do not loiter.
-  * Never call `move("forward", ...)` without first calling
-    `check_path_clear("forward")`. If blocked, hover / rotate / try
-    another direction.
-  * If a tool returns `ERROR:` or `REFUSED:`, do not retry it the same
-    way. Adapt.
-  * Be conservative on real_fire — false positives are common in homes
-    (red curtains, sunset light, computer monitors, candles). Justify
-    real_fire with at least two independent visual cues.
-  * Be specific in your reasons — name what you saw ("orange flicker
-    behind couch", "haze hugging ceiling near kitchen") rather than
-    generic phrases.
+  * NEVER call `move("forward", ...)` without first calling
+    `check_path_clear("forward")`. If it refuses, do not retry forward in
+    the same orientation — rotate, then re-check, then move.
+  * If `move("down", ...)` is REFUSED for low altitude, do not retry going
+    down — you're already near the floor. Stay level or go up.
+  * If any tool returns `ERROR:` or `REFUSED:`, adapt instead of repeating
+    the same call.
+  * Conservative on real_fire — your reasons must cite at least two
+    *independent visual cues* (ideally from two different positions or
+    angles). "I saw orange" alone is not enough.
+  * Be specific in your reasons. Good: "orange flicker behind the couch,
+    haze hugging the ceiling near the kitchen entrance." Bad: "fire visible
+    in the room."
 
-Output style: short and procedural. The operator is watching your
-reasoning live in a UI, so think in 1-2 sentence beats between tool
-calls. No bullet lists in the thinking text."""
+Output style: short and procedural. The operator is watching your reasoning
+live in a UI, so think in 1-2 sentence beats between tool calls — what you
+plan to do next, and what the last result told you. No bullet lists, no
+multi-paragraph plans. Action over deliberation."""
 
 
 def _build_agent() -> Agent:
@@ -453,9 +508,13 @@ async def run_mission(trigger: str = "manual") -> MissionState:
 
         agent = _build_agent()
         user_prompt = (
-            "A fire alarm has just been triggered."
-            f" Trigger source: {trigger}."
-            " Investigate the room and submit a finding."
+            "A fire alarm has just been triggered. "
+            f"Trigger source: {trigger}. "
+            "Patrol the home within ~5 m of the takeoff point. Visit "
+            "multiple distinct positions and inspect each visually before "
+            "deciding. Only submit a finding after you have evidence from "
+            "at least three different vantage points (unless you confirm a "
+            "real fire earlier, in which case wrap up immediately)."
         )
 
         mission_state.state = "running"
