@@ -1,62 +1,84 @@
-# FireDrone
+# FireDrone — Tello
 
-Autonomous fire-response drone agent. When a fire alarm is detected, an OpenAI
-agent flies the BetaFPV Air75 around the room via the DroneForge dongle, checks
-camera frames against vision models, and decides whether the alarm is real
-before notifying the (simulated) fire department.
+Tello variant of FireDrone. A self-contained web dashboard for live control,
+telemetry, and video, built as the foundation for the autonomous fire-response
+agent.
 
-See [plan.md](plan.md) for the full project plan.
+This folder is an independent uv project. The original NimbusOS / BetaFPV
+implementation under `../firedrone/` is preserved untouched.
 
-## Milestone 1: keyboard teleop
+## Hardware
 
-Goal: control the drone live from the laptop using the keyboard, on top of a
-`Drone` wrapper that the rest of the codebase will share.
+- **DJI Tello** (original, not EDU). Speaks UDP SDK directly over its own WiFi AP.
+- **Laptop** with WiFi (for the drone) and **USB ethernet** (for internet /
+  OpenAI in later milestones).
 
-### Prereqs
+## Networking
 
-- Python 3.12 and [`uv`](https://docs.astral.sh/uv/) installed
-- NimbusOS desktop app running and connected to the DroneForge dongle
-- Drone powered on, propellers **OFF** for first bench tests
+The original Tello broadcasts its own WiFi (`TELLO-XXXXXX`). Your laptop joins
+it and reaches the drone at `192.168.10.1`. That WiFi has no internet.
 
-### Setup
+Once we wire in OpenAI, we use a second NIC (USB ethernet) for internet. For
+this milestone, only the Tello connection matters.
+
+Smoke test before running anything: laptop joined to Tello WiFi, then
 
 ```bash
+ping 192.168.10.1
+```
+
+If that fails, fix WiFi before continuing.
+
+## Setup
+
+```bash
+cd tello
 uv sync
 ```
 
-### Smoke test the SDK connection
+## Milestone 1 — Web dashboard
 
-With NimbusOS running and the drone on, this should print live telemetry for
-~5 seconds:
+Live video, telemetry, and full keyboard + on-screen control from a browser.
 
-```bash
-uv run firedrone-telemetry
-```
-
-If nothing prints, fix NimbusOS / the dongle before going further.
-
-### Teleop
+Run the dashboard:
 
 ```bash
-uv run firedrone-teleop
+uv run uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-Keys:
+Then open <http://127.0.0.1:8000> in a browser.
 
-| Key       | Action                              |
-| --------- | ----------------------------------- |
-| `T`       | Arm + takeoff to 1.0 m              |
-| `L`       | Land + disarm                       |
-| `Esc`     | Emergency land + exit               |
-| `W` / `S` | Step forward / back (0.2 m)         |
-| `A` / `D` | Step left / right (0.2 m)           |
-| `Space` / `Ctrl` | Step up / down (0.2 m)       |
-| `Q` / `E` | Yaw left / right (~11.5 deg)        |
-| `H`       | Hover (cancel current motion)       |
+### Smoke scripts
+
+Run these first to verify the SDK chain works before touching the web app.
+
+```bash
+uv run python scripts/smoke_telemetry.py   # 5s of telemetry, no flight
+uv run python scripts/smoke_video.py       # OpenCV window with live feed
+```
+
+### Controls
+
+Live motion is **hold-to-fly**: press and hold a key to fly continuously in
+that direction, release to stop. Hold combinations work naturally
+(e.g. `W + D` flies diagonally forward-right).
+
+| Key                       | Action                              |
+| ------------------------- | ----------------------------------- |
+| `T`                       | Takeoff                             |
+| `L`                       | Land                                |
+| `Esc`                     | **EMERGENCY** (cuts motors)         |
+| `W` / `S`                 | Forward / back (hold)               |
+| `A` / `D`                 | Left / right (hold)                 |
+| `Space` / `Shift`         | Up / down (hold)                    |
+| `Q` / `E`                 | Yaw left / right (hold)             |
+| `1` / `2` / `3` / `4`     | Flip forward / back / left / right  |
+
+On-screen motion buttons mirror the keyboard with click-and-hold.
 
 ### Safety
 
-- Hard 90-second flight cap (`Drone` watchdog auto-lands)
-- Auto-land below 3.4 V battery
-- Position commands are clamped to a small indoor envelope
-- Always do first runs with props off and the RadioMaster bound as override
+- WebSocket disconnect (tab closed, network drop) → auto-emergency (motors cut)
+- Big red EMERGENCY button on the dashboard, always reachable
+- Battery indicator turns red below 15% (manual landing still required)
+- Always fly in a cleared room — no obstacle avoidance, no physical RC override
