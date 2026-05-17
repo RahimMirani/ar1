@@ -275,6 +275,32 @@
         <div id="perception-check-result" class="perception-check-result" hidden></div>
       </section>
 
+      <section class="card map-card">
+        <h2 class="card-title">Map
+          <span id="map-state-badge" class="audio-state-badge" data-state="idle">off</span>
+        </h2>
+        <div class="row">
+          <button id="btn-map-toggle" class="btn btn-primary" data-on="false">Enable map</button>
+          <button id="btn-map-reset"  class="btn">Re-anchor</button>
+        </div>
+        <div id="map-pane" class="map-frame" hidden>
+          <img id="map-feed" alt="2D dead-reckoned map view" />
+          <div class="map-label">
+            <span class="map-label-title">Map · dead-reckon</span>
+            <span class="map-label-sub">white = path · amber/red = obstacle</span>
+          </div>
+          <div id="map-overlay" class="map-overlay">
+            <div class="map-overlay-text">Awaiting first render…</div>
+          </div>
+        </div>
+        <dl class="map-stats">
+          <dt>pose</dt>         <dd><span id="map-pose">—</span></dd>
+          <dt>confidence</dt>   <dd><span id="map-conf">—</span></dd>
+          <dt>trajectory</dt>   <dd><span id="map-traj">0</span> pts</dd>
+          <dt>obstacle cells</dt><dd><span id="map-occ">0</span></dd>
+        </dl>
+      </section>
+
       <section class="card">
         <h2 class="card-title">Vision <span class="muted">gpt-4o-mini</span></h2>
         <div class="row">

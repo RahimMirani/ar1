@@ -1037,6 +1037,109 @@ body {
 .audio-info-line #audio-pulses,
 .audio-info-line #audio-device { color: var(--text); }
 
+/* ----- mapping ----- */
+/* 2D dead-reckoned map card. Same visual vocabulary as the depth tile —
+ * dark frame, glass label, subtle overlay while waiting for the first
+ * render. Stats grid mirrors .telemetry-grid so two cards stacked feel
+ * cohesive. */
+
+.map-frame {
+  position: relative;
+  margin-top: 10px;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.map-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.map-label {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 3px 7px;
+  background: var(--hud-glass);
+  border: 1px solid var(--hud-border);
+  border-radius: var(--radius);
+  pointer-events: none;
+}
+.map-label-title {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.map-label-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+.map-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: #000;
+  transition: opacity 200ms ease;
+  z-index: 4;
+}
+.map-overlay-text {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.map-overlay.hidden { opacity: 0; }
+
+#btn-map-toggle[data-on="true"] {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.map-stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 14px;
+  margin: 10px 0 0;
+  font-size: 11.5px;
+}
+.map-stats dt {
+  color: var(--text-muted);
+  font-size: 11px;
+  align-self: center;
+}
+.map-stats dd {
+  margin: 0;
+  text-align: right;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+#map-state-badge[data-state="armed"] { color: var(--text); border-color: var(--border-hi); }
+#map-state-badge[data-state="low"]   { color: var(--bad); border-color: var(--bad); }
+
+/* When pose confidence drops we paint the value red so the operator
+ * sees the trajectory is suspect without having to read the badge. */
+.map-stats #map-conf[data-conf="low"] { color: var(--bad); }
+.map-stats #map-conf[data-conf="ok"]  { color: var(--text); }
+
 /* ----- perception ----- */
 
 .perception-line {

@@ -118,6 +118,19 @@ const els = {
     result:    $("perception-check-result"),
   },
 
+  map: {
+    toggle:   $("btn-map-toggle"),
+    reset:    $("btn-map-reset"),
+    badge:    $("map-state-badge"),
+    pane:     $("map-pane"),
+    feed:     $("map-feed"),
+    overlay:  $("map-overlay"),
+    pose:     $("map-pose"),
+    conf:     $("map-conf"),
+    traj:     $("map-traj"),
+    occ:      $("map-occ"),
+  },
+
   agent: {
     start:           $("btn-agent-start"),
     badge:           $("agent-state-badge"),
@@ -961,6 +974,135 @@ if (depthToggleBtn) {
   // backend match and wires the MJPEG src. Users can still toggle it
   // off via the same button.
   setDepthView(true);
+}
+
+// ----------------------------- map toggle ----------------------------- //
+//
+// 2D dead-reckoned mapping. Off by default — the operator opts in via
+// the "Enable map" button. When ON we POST /api/map/start (server spins
+// up the Mapper's pose + render threads at 10 Hz / 2 Hz), and point an
+// <img> at /map.mjpg. The mapper auto-resets on the takeoff transition
+// it observes, so the operator usually does not need to hit Re-anchor;
+// the button is there for the case where mid-flight drift has obviously
+// thrown the canvas off and they want to start fresh.
+
+let mapEnabled = false;
+let mapFirstFrameSeen = false;
+let mapPollTimer = null;
+
+function setMapOverlay(msg) {
+  if (!els.map.overlay) return;
+  const txt = els.map.overlay.querySelector(".map-overlay-text");
+  if (txt) txt.textContent = msg;
+  els.map.overlay.classList.remove("hidden");
+}
+
+function paintMapStats(s) {
+  if (!s) return;
+  const pose = s.pose || {};
+  if (els.map.pose) {
+    if (typeof pose.x_m === "number") {
+      els.map.pose.textContent =
+        `${pose.x_m.toFixed(2)}, ${pose.y_m.toFixed(2)} m · ${pose.theta_deg.toFixed(0)}°`;
+    } else {
+      els.map.pose.textContent = "—";
+    }
+  }
+  if (els.map.conf) {
+    const conf = s.pose_confidence || "ok";
+    els.map.conf.dataset.conf = conf;
+    els.map.conf.textContent = conf === "low"
+      ? "LOW · flow lockout suspected"
+      : "ok";
+  }
+  if (els.map.traj) els.map.traj.textContent = String(s.trajectory_points ?? 0);
+  if (els.map.occ)  els.map.occ.textContent  = String(s.occupied_cells ?? 0);
+
+  if (els.map.badge) {
+    const state = (s.enabled === false)
+      ? "idle"
+      : (s.pose_confidence === "low" ? "low" : "armed");
+    const labels = { idle: "off", armed: "armed", low: "low conf" };
+    els.map.badge.dataset.state = state;
+    els.map.badge.textContent   = labels[state] || state;
+  }
+}
+
+async function pollMapStatus() {
+  if (!mapEnabled) return;
+  try {
+    const res = await fetch("/api/map/status");
+    const data = await res.json();
+    paintMapStats(data);
+  } catch (_err) { /* transient — keep polling */ }
+}
+
+if (els.map.feed) {
+  els.map.feed.addEventListener("load", () => {
+    if (!mapFirstFrameSeen) {
+      mapFirstFrameSeen = true;
+      els.map.overlay?.classList.add("hidden");
+    }
+  });
+  els.map.feed.addEventListener("error", () => {
+    if (mapEnabled) setMapOverlay("Map feed dropped — retrying…");
+  });
+}
+
+async function setMap(enable) {
+  if (!els.map.toggle || !els.map.pane || !els.map.feed) return;
+  els.map.toggle.disabled = true;
+  try {
+    if (enable) {
+      mapFirstFrameSeen = false;
+      setMapOverlay("Awaiting first render…");
+      els.map.pane.hidden = false;
+      await fetch("/api/map/start", { method: "POST" });
+      els.map.feed.src = "/map.mjpg?t=" + Date.now();
+      els.map.toggle.dataset.on = "true";
+      els.map.toggle.textContent = "Map · ON";
+      mapEnabled = true;
+      if (!mapPollTimer) {
+        mapPollTimer = setInterval(pollMapStatus, 1000);
+      }
+      pollMapStatus();
+      log("info", "map: enabled (auto-resets on takeoff)");
+    } else {
+      els.map.feed.removeAttribute("src");
+      els.map.pane.hidden = true;
+      await fetch("/api/map/stop", { method: "POST" });
+      els.map.toggle.dataset.on = "false";
+      els.map.toggle.textContent = "Enable map";
+      mapEnabled = false;
+      if (mapPollTimer) { clearInterval(mapPollTimer); mapPollTimer = null; }
+      paintMapStats({ enabled: false, pose_confidence: "ok",
+                      trajectory_points: 0, occupied_cells: 0 });
+      log("info", "map: disabled");
+    }
+  } catch (err) {
+    log("error", `map toggle: ${err}`);
+  } finally {
+    els.map.toggle.disabled = false;
+  }
+}
+
+if (els.map.toggle) {
+  els.map.toggle.addEventListener("click", () => setMap(!mapEnabled));
+}
+if (els.map.reset) {
+  els.map.reset.addEventListener("click", async () => {
+    els.map.reset.disabled = true;
+    try {
+      const res = await fetch("/api/map/reset", { method: "POST" });
+      const data = await res.json();
+      paintMapStats(data);
+      log("info", "map: re-anchored at current position");
+    } catch (err) {
+      log("error", `map reset: ${err}`);
+    } finally {
+      els.map.reset.disabled = false;
+    }
+  });
 }
 
 // ----------------------------- agent ----------------------------- //

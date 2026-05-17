@@ -69,13 +69,18 @@ VALID_VERDICTS = {"real_fire", "false_alarm", "unknown"}
 
 _drone = None  # type: ignore[assignment]
 _watchdog = None  # type: ignore[assignment]
+_mapper = None  # type: ignore[assignment]
 
 
-def configure(drone, watchdog) -> None:
-    """Hook up the live drone + watchdog used by the @function_tool callables."""
-    global _drone, _watchdog
+def configure(drone, watchdog, mapper=None) -> None:
+    """Hook up the live drone + watchdog + mapper used by the @function_tool
+    callables. ``mapper`` is optional so existing call sites that haven't
+    been updated yet still work — the pose/map tools degrade gracefully
+    to "mapper not configured" when it's absent."""
+    global _drone, _watchdog, _mapper
     _drone = drone
     _watchdog = watchdog
+    _mapper = mapper
 
 
 # --------------------------------------------------------------------------- #
