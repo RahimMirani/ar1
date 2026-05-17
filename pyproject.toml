@@ -9,6 +9,17 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     "opencv-python>=4.10.0",
+    # AI: vision + agent loop
+    "openai>=1.54.0",
+    "openai-agents>=0.0.6",
+    "pydantic>=2.9.0",
+    "python-dotenv>=1.0.1",
+    # Audio: smoke-alarm detector (FFT + mic capture)
+    "sounddevice>=0.5.0",
+    "numpy>=1.26.0",
+    # Vision support: MiDaS depth ONNX is loaded via cv2.dnn (no extra runtime).
+    # HTTP for notifier webhook (already a transitive dep but make it explicit).
+    "httpx>=0.27.0",
 ]
 
 [tool.uv]

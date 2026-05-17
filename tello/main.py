@@ -27,12 +27,27 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Optional
 
-from drone import Drone, VALID_FLIP_DIRECTIONS
-
 import cv2
+from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+
+# Load tello/.env before importing modules that read API keys at import.
+load_dotenv(Path(__file__).resolve().parent / ".env")
+
+from drone import Drone, VALID_FLIP_DIRECTIONS  # noqa: E402
+from events import bus  # noqa: E402
+from vision import analyze_frame  # noqa: E402
+from audio import monitor as audio_monitor  # noqa: E402
+from perception import OpticalFlowWatchdog, check_path_clear  # noqa: E402
+from agent import (  # noqa: E402
+    configure as agent_configure,
+    mission_state,
+    is_busy as agent_is_busy,
+    run_mission,
+)
+from notifier import run_notifier_loop, latest_incident  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,15 +65,94 @@ JPEG_QUALITY = 70
 # Single shared drone instance for the process. The dashboard is single-user.
 drone = Drone()
 
+# Optical-flow watchdog. Auto-starts on takeoff (set_velocity callable is
+# the documented fire-and-forget RC path so the watchdog never goes
+# through the SDK command lock).
+perception_watchdog = OpticalFlowWatchdog(
+    get_frame=drone.get_frame,
+    drone_stop=drone.stop_velocity,
+)
+
+# Inject the live drone + watchdog into agent.py so its @function_tool
+# callables can drive them.
+agent_configure(drone, perception_watchdog)
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     logger.info("starting up tello dashboard")
+    # Producers in background threads (audio capture, perception watchdog,
+    # agent worker) publish via bus.publish_threadsafe, which needs the
+    # running loop.
+    bus.attach_loop(asyncio.get_running_loop())
+    bridge_task   = asyncio.create_task(_audio_alarm_to_agent_bridge())
+    notifier_task = asyncio.create_task(run_notifier_loop())
     try:
         yield
     finally:
         logger.info("shutting down: closing drone")
+        for task in (bridge_task, notifier_task):
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         drone.close()
+
+
+async def _audio_alarm_to_agent_bridge() -> None:
+    """Auto-trigger the agent when the audio detector (or the Simulate
+    button) emits an ``audio_alarm`` with state ``alarm``.
+
+    This is the production handoff between Phase B and Phase C. We gate
+    on three conditions:
+
+    * the drone is connected (otherwise takeoff is guaranteed to fail);
+    * the agent isn't already running (single-flight);
+    * the alarm event is a *transition into* ``alarm`` — we ignore
+      repeats so a sustained tone doesn't restart the mission.
+    """
+    queue = bus.subscribe()
+    last_state: str | None = None
+    try:
+        while True:
+            ev = await queue.get()
+            if ev.get("type") != "audio_alarm":
+                continue
+            state = ev.get("state")
+            transitioned = state == "alarm" and last_state != "alarm"
+            last_state = state
+            if not transitioned:
+                continue
+            if not drone.snapshot().connected:
+                logger.info("audio alarm received but drone is not connected")
+                await bus.publish(
+                    {
+                        "type": "agent_skipped",
+                        "reason": "drone not connected",
+                        "trigger": f"audio:{ev.get('source', '?')}",
+                    }
+                )
+                continue
+            if agent_is_busy():
+                logger.info("audio alarm received but agent is busy")
+                await bus.publish(
+                    {
+                        "type": "agent_skipped",
+                        "reason": "agent already running",
+                        "trigger": f"audio:{ev.get('source', '?')}",
+                    }
+                )
+                continue
+            trigger = f"audio:{ev.get('source', '?')}"
+            logger.info("audio alarm -> auto-triggering agent (%s)", trigger)
+            asyncio.create_task(_run_mission_task(trigger))
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        logger.warning("audio->agent bridge crashed: %s", exc)
+    finally:
+        bus.unsubscribe(queue)
 
 
 app = FastAPI(title="FireDrone Tello Dashboard", lifespan=lifespan)
@@ -74,7 +168,188 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/dashboard", include_in_schema=False)
+async def dispatcher_dashboard() -> FileResponse:
+    """Read-only firefighter-facing real-time view of the current mission.
+
+    Shares the same ``/ws/events`` event stream and ``/video.mjpg`` as
+    the operator console, but the page itself never sends commands.
+    """
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# --------------------------------------------------------------------------- #
+# Event bus WebSocket — fan-out for vision/audio/agent/notifier events
+# --------------------------------------------------------------------------- #
+
+
+@app.websocket("/ws/events")
+async def ws_events(websocket: WebSocket) -> None:
+    """Subscribe to the structured event bus.
+
+    Both the operator console and the dispatcher dashboard connect here
+    and receive the same stream (vision results, audio alarms, agent
+    reasoning, incidents, etc.). One subscriber queue per connection.
+    """
+    await websocket.accept()
+    queue = bus.subscribe()
+    try:
+        while True:
+            event = await queue.get()
+            await websocket.send_json(event)
+    except WebSocketDisconnect:
+        logger.info("events websocket closed")
+    except Exception as exc:
+        logger.warning("events websocket error: %s", exc)
+    finally:
+        bus.unsubscribe(queue)
+
+
+# --------------------------------------------------------------------------- #
+# Vision — one-shot "analyze current view"
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/vision/analyze")
+async def api_vision_analyze() -> dict[str, Any]:
+    """Grab the most recent frame and run it through the vision model.
+
+    Result is also broadcast on ``/ws/events`` so the dispatcher
+    dashboard receives the same payload without an extra round-trip.
+    """
+    frame = drone.get_frame()
+    if frame is None:
+        return {"error": "no frame available — connect the drone and start the stream"}
+
+    try:
+        result = await asyncio.to_thread(analyze_frame, frame)
+    except Exception as exc:
+        msg = f"vision analyze failed: {exc}"
+        logger.warning(msg)
+        return {"error": msg}
+
+    payload = result.to_dict()
+    await bus.publish({"type": "vision_result", "source": "manual", **payload})
+    return payload
+
+
+# --------------------------------------------------------------------------- #
+# Audio — smoke-alarm detector
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/audio/start")
+async def api_audio_start() -> dict[str, Any]:
+    status = await asyncio.to_thread(audio_monitor.start)
+    return status.to_dict()
+
+
+@app.post("/api/audio/stop")
+async def api_audio_stop() -> dict[str, Any]:
+    status = await asyncio.to_thread(audio_monitor.stop)
+    return status.to_dict()
+
+
+@app.get("/api/audio/status")
+async def api_audio_status() -> dict[str, Any]:
+    return audio_monitor.status().to_dict()
+
+
+@app.post("/api/audio/simulate")
+async def api_audio_simulate() -> dict[str, Any]:
+    """Manually fire an audio_alarm event for ~4 s.
+
+    Lets you exercise the agent's auto-trigger without holding a smoke
+    alarm next to the mic. The downstream code path is identical to a
+    real detection.
+    """
+    return await asyncio.to_thread(audio_monitor.simulate_alarm)
+
+
+# --------------------------------------------------------------------------- #
+# Perception — depth check + optical-flow watchdog
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/perception/start")
+async def api_perception_start() -> dict[str, Any]:
+    return (await asyncio.to_thread(perception_watchdog.start)).to_dict()
+
+
+@app.post("/api/perception/stop")
+async def api_perception_stop() -> dict[str, Any]:
+    return (await asyncio.to_thread(perception_watchdog.stop)).to_dict()
+
+
+@app.get("/api/perception/status")
+async def api_perception_status() -> dict[str, Any]:
+    return perception_watchdog.status().to_dict()
+
+
+@app.post("/api/perception/check")
+async def api_perception_check(direction: str = "forward") -> dict[str, Any]:
+    """Run a one-shot depth check on the current frame.
+
+    Useful as a manual smoke test from the operator console (also what
+    the agent's ``check_path_clear`` tool calls internally).
+    """
+    frame = drone.get_frame()
+    if frame is None:
+        return {"error": "no frame available"}
+    result = await asyncio.to_thread(check_path_clear, frame, direction=direction)
+    payload = result.to_dict()
+    await bus.publish({"type": "perception_check", "source": "manual", **payload})
+    return payload
+
+
+# --------------------------------------------------------------------------- #
+# Agent — autonomous mission loop
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/agent/start")
+async def api_agent_start(trigger: str = "manual") -> dict[str, Any]:
+    """Kick off an autonomous mission.
+
+    Returns immediately with the initial mission state; the actual run
+    progresses on the FastAPI loop and streams events on ``/ws/events``.
+    """
+    if agent_is_busy():
+        return {"error": "agent already running", **mission_state.to_dict()}
+    # Spawn as a task — the endpoint replies right away so the operator
+    # console can render the "running" state.
+    asyncio.create_task(_run_mission_task(trigger))
+    # Give the task a tick to flip state to "starting".
+    await asyncio.sleep(0.05)
+    return mission_state.to_dict()
+
+
+@app.get("/api/agent/state")
+async def api_agent_state() -> dict[str, Any]:
+    return mission_state.to_dict()
+
+
+async def _run_mission_task(trigger: str) -> None:
+    try:
+        await run_mission(trigger)
+    except Exception as exc:
+        logger.exception("mission task crashed: %s", exc)
+
+
+# --------------------------------------------------------------------------- #
+# Incidents — the most recent notifier-emitted incident
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/incidents/latest")
+async def api_incident_latest() -> dict[str, Any]:
+    inc = latest_incident()
+    if inc is None:
+        return {"incident": None}
+    return {"incident": inc}
 
 
 # --------------------------------------------------------------------------- #
@@ -216,9 +491,15 @@ async def _execute_command(cmd: dict[str, Any]) -> dict[str, Any]:
 
     if action == "takeoff":
         await asyncio.to_thread(drone.takeoff)
+        # Reactive safety: start the optical-flow watchdog whenever the
+        # drone is in the air. Idempotent; the watchdog manages its own
+        # thread lifecycle.
+        await asyncio.to_thread(perception_watchdog.start)
     elif action == "land":
+        await asyncio.to_thread(perception_watchdog.stop)
         await asyncio.to_thread(drone.land)
     elif action == "emergency":
+        await asyncio.to_thread(perception_watchdog.stop)
         await asyncio.to_thread(drone.emergency)
     elif action == "set_velocity":
         lr  = int(cmd.get("lr", 0))

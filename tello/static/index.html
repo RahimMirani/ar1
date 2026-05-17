@@ -10,6 +10,18 @@
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
+  <div id="incident-banner" class="incident-banner" hidden>
+    <div class="incident-banner-inner">
+      <span id="incident-banner-verdict" class="incident-verdict-pill" data-verdict="unknown">—</span>
+      <div class="incident-banner-text">
+        <span id="incident-banner-title" class="incident-banner-title">—</span>
+        <span id="incident-banner-summary" class="incident-banner-summary"></span>
+      </div>
+      <span id="incident-banner-meta" class="incident-banner-meta"></span>
+      <button id="incident-banner-dismiss" class="incident-banner-dismiss" aria-label="dismiss">×</button>
+    </div>
+  </div>
+
   <header class="topbar">
     <div class="brand">
       <span class="brand-mark" aria-hidden="true">
@@ -173,6 +185,95 @@
           <button class="btn pad-btn" data-action="flip" data-direction="l"><kbd>3</kbd> left</button>
           <button class="btn pad-btn" data-action="flip" data-direction="r"><kbd>4</kbd> right</button>
         </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Audio
+          <span id="audio-state-badge" class="audio-state-badge" data-state="idle">off</span>
+        </h2>
+        <div class="row">
+          <button id="btn-audio-start" class="btn btn-primary">Arm mic</button>
+          <button id="btn-audio-stop"  class="btn">Stop</button>
+          <button id="btn-audio-simulate" class="btn">Simulate alarm</button>
+        </div>
+        <div class="audio-meter">
+          <div class="audio-meter-row">
+            <span class="audio-meter-label">3 kHz band</span>
+            <div id="audio-meter-band" class="audio-meter-bar"><div class="fill"></div></div>
+            <span id="audio-meter-band-db" class="audio-meter-val">—</span>
+          </div>
+          <div class="audio-meter-row">
+            <span class="audio-meter-label">broadband</span>
+            <div id="audio-meter-broad" class="audio-meter-bar"><div class="fill"></div></div>
+            <span id="audio-meter-broad-db" class="audio-meter-val">—</span>
+          </div>
+        </div>
+        <div id="audio-status-line" class="status-line">
+          <span class="muted">device</span>
+          <span id="audio-device">—</span>
+        </div>
+        <div id="audio-error" class="error-line" hidden></div>
+      </section>
+
+      <section class="card agent-card">
+        <h2 class="card-title">Agent
+          <span id="agent-state-badge" class="agent-state-badge" data-state="idle">idle</span>
+        </h2>
+        <div class="row">
+          <button id="btn-agent-start" class="btn btn-primary">Activate agent</button>
+        </div>
+        <div id="agent-meta" class="agent-meta" hidden>
+          <span class="muted">mission</span>
+          <span id="agent-mission-id">—</span>
+          <span class="muted">·</span>
+          <span class="muted">elapsed</span>
+          <span id="agent-elapsed">—</span>
+        </div>
+        <ol id="agent-transcript" class="agent-transcript"></ol>
+        <div id="agent-finding" class="agent-finding" hidden>
+          <div class="agent-finding-head">
+            <span id="agent-finding-verdict" class="agent-verdict" data-verdict="unknown">—</span>
+            <span id="agent-finding-meta" class="muted"></span>
+          </div>
+          <p id="agent-finding-summary" class="agent-finding-summary"></p>
+          <ul id="agent-finding-reasons" class="agent-finding-reasons"></ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Safety
+          <span id="perception-state-badge" class="audio-state-badge" data-state="idle">watchdog off</span>
+        </h2>
+        <div class="row">
+          <button id="btn-perception-check" class="btn">Check forward path</button>
+        </div>
+        <div id="perception-line" class="perception-line">
+          <span class="muted">flow score</span>
+          <span id="perception-score">—</span>
+          <span class="muted">·</span>
+          <span class="muted">last alert</span>
+          <span id="perception-last-alert">—</span>
+        </div>
+        <div id="perception-check-result" class="perception-check-result" hidden></div>
+      </section>
+
+      <section class="card">
+        <h2 class="card-title">Vision <span class="muted">gpt-4o-mini</span></h2>
+        <div class="row">
+          <button id="btn-vision-analyze" class="btn btn-primary">Analyze current view</button>
+        </div>
+        <div id="vision-result" class="vision-result" hidden>
+          <div class="vision-head">
+            <span id="vision-severity" class="vision-severity" data-severity="none">none</span>
+            <span id="vision-chips" class="vision-chips"></span>
+            <span id="vision-conf" class="vision-conf"></span>
+          </div>
+          <p id="vision-desc" class="vision-desc"></p>
+          <ul id="vision-reasons" class="vision-reasons"></ul>
+          <img id="vision-thumb" class="vision-thumb" alt="analyzed frame" />
+          <div id="vision-meta" class="vision-meta"></div>
+        </div>
+        <div id="vision-error" class="error-line" hidden></div>
       </section>
     </aside>
 

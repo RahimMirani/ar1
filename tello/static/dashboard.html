@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FireDrone — Dispatcher</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/dashboard.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name">FireDrone · <em>Dispatcher</em></span>
+    </div>
+    <span id="status-pill" class="status-pill" data-state="idle">Standby</span>
+    <span id="now-clock" class="now-clock">--:--:--</span>
+  </header>
+
+  <section id="incident-banner" class="incident-banner" data-verdict="idle">
+    <div class="incident-pill" id="incident-pill" data-verdict="idle">Standby</div>
+    <div class="incident-text">
+      <div class="incident-title" id="incident-title">Waiting for an alarm</div>
+      <div class="incident-summary" id="incident-summary">
+        The drone is on standby. When the smoke alarm fires the agent will take off, sweep the room, and report its verdict here.
+      </div>
+    </div>
+    <div class="incident-meta" id="incident-meta">—</div>
+  </section>
+
+  <main class="layout">
+    <section class="card video-card">
+      <header class="card-head">
+        <span class="card-title">Live feed</span>
+        <span id="video-tag" class="card-tag">offline</span>
+      </header>
+      <div class="video-frame">
+        <img id="video" alt="Tello live feed" />
+        <div id="video-overlay" class="video-overlay">
+          <div class="video-overlay-text">Standby</div>
+        </div>
+        <div class="hud-strip">
+          <span><b id="hud-battery">—</b><span class="u">%</span><span class="lbl">batt</span></span>
+          <span><b id="hud-altitude">—</b><span class="u">cm</span><span class="lbl">alt</span></span>
+          <span><b id="hud-flight">—</b><span class="u">s</span><span class="lbl">flight</span></span>
+          <span><b id="hud-audio-band">—</b><span class="u">dB</span><span class="lbl">3 kHz</span></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card mission-card">
+      <header class="card-head">
+        <span class="card-title">Mission</span>
+        <span id="mission-pill" class="card-tag" data-state="idle">idle</span>
+      </header>
+      <div class="mission-stats">
+        <div class="stat">
+          <div class="stat-k">mission</div>
+          <div class="stat-v" id="mission-id">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-k">trigger</div>
+          <div class="stat-v" id="mission-trigger">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-k">elapsed</div>
+          <div class="stat-v" id="mission-elapsed">—</div>
+        </div>
+        <div class="stat">
+          <div class="stat-k">evidence</div>
+          <div class="stat-v" id="mission-evidence-count">0</div>
+        </div>
+      </div>
+
+      <div class="mission-step">
+        <span class="muted">current step</span>
+        <div id="mission-step" class="mission-step-text">Awaiting trigger…</div>
+      </div>
+
+      <ol id="mission-feed" class="mission-feed"></ol>
+    </section>
+
+    <section class="card evidence-card">
+      <header class="card-head">
+        <span class="card-title">Evidence frames</span>
+        <span id="evidence-count" class="card-tag">0</span>
+      </header>
+      <div id="evidence-gallery" class="evidence-gallery">
+        <div class="evidence-empty">Evidence frames the agent captures will appear here in order.</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/dashboard.js"></script>
+</body>
+</html>

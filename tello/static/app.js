@@ -81,6 +81,63 @@ const els = {
     yaw:  $("vel-yaw"),
   },
   batteryBar: $("battery-bar"),
+
+  vision: {
+    btn:      $("btn-vision-analyze"),
+    result:   $("vision-result"),
+    severity: $("vision-severity"),
+    chips:    $("vision-chips"),
+    conf:     $("vision-conf"),
+    desc:     $("vision-desc"),
+    reasons:  $("vision-reasons"),
+    thumb:    $("vision-thumb"),
+    meta:     $("vision-meta"),
+    error:    $("vision-error"),
+  },
+
+  audio: {
+    start:    $("btn-audio-start"),
+    stop:     $("btn-audio-stop"),
+    simulate: $("btn-audio-simulate"),
+    badge:    $("audio-state-badge"),
+    band:     $("audio-meter-band"),
+    bandDb:   $("audio-meter-band-db"),
+    broad:    $("audio-meter-broad"),
+    broadDb:  $("audio-meter-broad-db"),
+    device:   $("audio-device"),
+    error:    $("audio-error"),
+  },
+
+  perception: {
+    badge:     $("perception-state-badge"),
+    check:     $("btn-perception-check"),
+    score:     $("perception-score"),
+    lastAlert: $("perception-last-alert"),
+    result:    $("perception-check-result"),
+  },
+
+  agent: {
+    start:           $("btn-agent-start"),
+    badge:           $("agent-state-badge"),
+    meta:            $("agent-meta"),
+    missionId:       $("agent-mission-id"),
+    elapsed:         $("agent-elapsed"),
+    transcript:      $("agent-transcript"),
+    finding:         $("agent-finding"),
+    findingVerdict:  $("agent-finding-verdict"),
+    findingMeta:     $("agent-finding-meta"),
+    findingSummary:  $("agent-finding-summary"),
+    findingReasons:  $("agent-finding-reasons"),
+  },
+
+  banner: {
+    root:    $("incident-banner"),
+    verdict: $("incident-banner-verdict"),
+    title:   $("incident-banner-title"),
+    summary: $("incident-banner-summary"),
+    meta:    $("incident-banner-meta"),
+    dismiss: $("incident-banner-dismiss"),
+  },
 };
 
 const state = {
@@ -589,8 +646,452 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) clearHeldKeys();
 });
 
+// ====================================================================
+// AI event channel — vision, audio, perception, agent, notifier all
+// fan out over the same /ws/events stream. We register a handler per
+// event.type and dispatch.
+// ====================================================================
+
+const eventHandlers = {};
+
+function connectEventsWs() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${proto}://${location.host}/ws/events`;
+  const ws = new WebSocket(url);
+  ws.onopen  = () => log("info", "events stream connected");
+  ws.onclose = () => {
+    log("warn", "events stream disconnected, retrying...");
+    setTimeout(connectEventsWs, 1000);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = (ev) => {
+    let payload;
+    try { payload = JSON.parse(ev.data); }
+    catch (err) { log("error", `bad event payload: ${err}`); return; }
+    const fn = eventHandlers[payload.type];
+    if (fn) fn(payload);
+  };
+}
+
+// ----------------------------- vision ----------------------------- //
+
+function renderVisionResult(p) {
+  if (!els.vision.result) return;
+  els.vision.result.hidden = false;
+  els.vision.error.hidden  = true;
+
+  const sev = p.severity || "none";
+  els.vision.severity.dataset.severity = sev;
+  els.vision.severity.textContent      = sev;
+
+  els.vision.chips.replaceChildren();
+  const addChip = (label, on, red) => {
+    const s = document.createElement("span");
+    s.className = "vision-chip" + (on ? (red ? " on-red" : " on") : "");
+    s.textContent = label;
+    els.vision.chips.appendChild(s);
+  };
+  addChip("fire",  !!p.fire_visible, true);
+  addChip("smoke", !!p.smoke_visible, false);
+
+  const cpct = Math.round((p.confidence || 0) * 100);
+  els.vision.conf.textContent = `${cpct}% conf`;
+
+  els.vision.desc.textContent = p.description || "";
+
+  els.vision.reasons.replaceChildren();
+  for (const r of (p.reasons || [])) {
+    const li = document.createElement("li");
+    li.textContent = r;
+    els.vision.reasons.appendChild(li);
+  }
+
+  if (p.thumbnail_b64) {
+    els.vision.thumb.src = `data:image/jpeg;base64,${p.thumbnail_b64}`;
+    els.vision.thumb.hidden = false;
+  } else {
+    els.vision.thumb.hidden = true;
+  }
+
+  const src = p.source || "manual";
+  els.vision.meta.textContent = `${p.model || "?"} · ${src} · ${p.latency_ms ?? "?"} ms`;
+
+  const lvl = (p.fire_visible || sev === "high") ? "error"
+            : (p.smoke_visible || sev === "medium") ? "warn"
+            : "info";
+  log(lvl, `vision (${src}): ${sev}${p.fire_visible ? " · fire" : ""}${p.smoke_visible ? " · smoke" : ""}`);
+}
+
+eventHandlers["vision_result"] = renderVisionResult;
+
+// ----------------------------- audio ----------------------------- //
+
+// Map a dBFS reading to a 0-100% bar width. -60 dB -> 0%, 0 dB -> 100%.
+function dbToPct(db) {
+  if (db === null || db === undefined || !isFinite(db)) return 0;
+  return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+}
+
+function setAudioState(stateKey) {
+  if (!els.audio.badge) return;
+  els.audio.badge.dataset.state = stateKey;
+  const labels = { idle: "off", armed: "listening", alarm: "ALARM", error: "error" };
+  els.audio.badge.textContent = labels[stateKey] || stateKey;
+  // Bar color follows state.
+  for (const bar of [els.audio.band, els.audio.broad]) {
+    if (!bar) continue;
+    bar.classList.toggle("hot",   stateKey === "armed");
+    bar.classList.toggle("alarm", stateKey === "alarm");
+  }
+}
+
+function renderAudioLevel(p) {
+  if (els.audio.band) {
+    els.audio.band.querySelector(".fill").style.width = `${dbToPct(p.alarm_band_db)}%`;
+    els.audio.bandDb.textContent = (typeof p.alarm_band_db === "number")
+      ? `${p.alarm_band_db.toFixed(0)} dB` : "—";
+  }
+  if (els.audio.broad) {
+    els.audio.broad.querySelector(".fill").style.width = `${dbToPct(p.broadband_db)}%`;
+    els.audio.broadDb.textContent = (typeof p.broadband_db === "number")
+      ? `${p.broadband_db.toFixed(0)} dB` : "—";
+  }
+}
+
+function renderAudioAlarm(p) {
+  setAudioState(p.state);
+  const src = p.source ? ` [${p.source}]` : "";
+  if (p.state === "alarm") {
+    log("error", `audio alarm${src}: ${p.reason || "tone detected"}`);
+  } else if (p.state === "armed") {
+    log("info",  `audio armed${src}${p.reason ? " — " + p.reason : ""}`);
+  } else if (p.state === "idle") {
+    log("info",  "audio monitor stopped");
+  } else if (p.state === "error") {
+    log("error", `audio error: ${p.error || "unknown"}`);
+    if (els.audio.error) {
+      els.audio.error.hidden = false;
+      els.audio.error.textContent = p.error || "audio error";
+    }
+  }
+}
+
+eventHandlers["audio_level"] = renderAudioLevel;
+eventHandlers["audio_alarm"] = renderAudioAlarm;
+
+async function postAudio(path) {
+  try {
+    const res = await fetch(path, { method: "POST" });
+    const data = await res.json();
+    if (data.device) els.audio.device.textContent = data.device;
+    if (data.state)  setAudioState(data.state);
+    if (data.error) {
+      els.audio.error.hidden = false;
+      els.audio.error.textContent = data.error;
+      log("error", `audio: ${data.error}`);
+    } else {
+      els.audio.error.hidden = true;
+    }
+    return data;
+  } catch (err) {
+    log("error", `audio request failed: ${err}`);
+    return null;
+  }
+}
+
+if (els.audio.start)    els.audio.start.addEventListener("click",    () => postAudio("/api/audio/start"));
+if (els.audio.stop)     els.audio.stop.addEventListener("click",     () => postAudio("/api/audio/stop"));
+if (els.audio.simulate) els.audio.simulate.addEventListener("click", () => postAudio("/api/audio/simulate"));
+
+// ----------------------------- perception ----------------------------- //
+
+function setPerceptionState(enabled) {
+  if (!els.perception.badge) return;
+  els.perception.badge.dataset.state = enabled ? "armed" : "idle";
+  els.perception.badge.textContent   = enabled ? "watchdog on" : "watchdog off";
+}
+
+function renderPerceptionState(p) {
+  setPerceptionState(!!p.enabled);
+  log("info", p.enabled ? "obstacle watchdog armed" : "obstacle watchdog disarmed");
+}
+
+function renderPerceptionAlert(p) {
+  if (els.perception.score) {
+    els.perception.score.textContent = (typeof p.score === "number") ? p.score.toFixed(2) : "—";
+  }
+  if (els.perception.lastAlert) {
+    els.perception.lastAlert.textContent = p.kind || "alert";
+  }
+  log("error", `perception: ${p.reason || p.kind || "alert"} -> ${p.action || ""}`);
+}
+
+function renderPerceptionCheck(p) {
+  const el = els.perception.result;
+  if (!el) return;
+  el.hidden = false;
+  if (!p.available) {
+    el.dataset.clear = "unavailable";
+    el.textContent = "MiDaS not available — depth check skipped";
+    return;
+  }
+  el.dataset.clear = p.clear ? "true" : "false";
+  el.textContent =
+    `${p.direction}: ${p.clear ? "CLEAR" : "BLOCKED"} · ` +
+    `obstacle ratio ${(p.obstacle_ratio * 100).toFixed(0)}% · ` +
+    `${p.latency_ms} ms`;
+  log(p.clear ? "info" : "warn", `perception (${p.direction}): ${p.reason}`);
+}
+
+eventHandlers["perception_state"] = renderPerceptionState;
+eventHandlers["perception_alert"] = renderPerceptionAlert;
+eventHandlers["perception_check"] = renderPerceptionCheck;
+
+if (els.perception.check) {
+  els.perception.check.addEventListener("click", async () => {
+    els.perception.check.disabled = true;
+    try {
+      const res = await fetch("/api/perception/check?direction=forward", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        log("error", `perception: ${data.error}`);
+      } else {
+        renderPerceptionCheck({ source: "manual", ...data });
+      }
+    } catch (err) {
+      log("error", `perception: ${err}`);
+    } finally {
+      els.perception.check.disabled = false;
+    }
+  });
+}
+
+// ----------------------------- agent ----------------------------- //
+
+const agentRun = {
+  missionId: null,
+  startedAt: null,
+  timer:     null,
+};
+
+function setAgentBadge(stateKey) {
+  if (!els.agent.badge) return;
+  els.agent.badge.dataset.state = stateKey;
+  const labels = {
+    idle: "idle", starting: "starting", running: "running",
+    done: "done", error: "error",
+  };
+  els.agent.badge.textContent = labels[stateKey] || stateKey;
+}
+
+function clearAgentTranscript() {
+  if (els.agent.transcript) els.agent.transcript.replaceChildren();
+  if (els.agent.finding) els.agent.finding.hidden = true;
+}
+
+function addAgentEntry(kind, body) {
+  if (!els.agent.transcript) return;
+  const li = document.createElement("li");
+  li.className = `agent-entry agent-entry-${kind}`;
+  const k = document.createElement("span");
+  k.className = "entry-kind";
+  k.textContent = kind;
+  const b = document.createElement("span");
+  b.className = "entry-body";
+  if (typeof body === "string") b.textContent = body;
+  else b.appendChild(body);
+  li.appendChild(k);
+  li.appendChild(b);
+  els.agent.transcript.appendChild(li);
+  els.agent.transcript.scrollTop = els.agent.transcript.scrollHeight;
+}
+
+function startAgentTimer() {
+  stopAgentTimer();
+  agentRun.timer = setInterval(() => {
+    if (!agentRun.startedAt) return;
+    const sec = (Date.now() - agentRun.startedAt) / 1000;
+    if (els.agent.elapsed) els.agent.elapsed.textContent = `${sec.toFixed(1)} s`;
+  }, 200);
+}
+function stopAgentTimer() {
+  if (agentRun.timer) { clearInterval(agentRun.timer); agentRun.timer = null; }
+}
+
+function renderAgentState(p) {
+  setAgentBadge(p.state);
+  if (p.mission_id && p.mission_id !== agentRun.missionId) {
+    agentRun.missionId = p.mission_id;
+    if (els.agent.missionId) els.agent.missionId.textContent = p.mission_id;
+    if (els.agent.meta) els.agent.meta.hidden = false;
+  }
+  if (p.state === "running" || p.state === "starting") {
+    if (!agentRun.startedAt) {
+      agentRun.startedAt = Date.now();
+      clearAgentTranscript();
+      startAgentTimer();
+    }
+    log("info", `agent: ${p.state}${p.trigger ? " ("+p.trigger+")" : ""}`);
+  } else if (p.state === "done") {
+    stopAgentTimer();
+    agentRun.startedAt = null;
+    log("info", `agent: done verdict=${p.verdict || "?"}`);
+  } else if (p.state === "error") {
+    stopAgentTimer();
+    agentRun.startedAt = null;
+    addAgentEntry("error", p.error || "agent error");
+    log("error", `agent error: ${p.error || ""}`);
+  }
+}
+
+function renderAgentMessage(p) {
+  addAgentEntry("thought", p.content || "");
+}
+
+function renderAgentToolCall(p) {
+  const body = document.createElement("span");
+  const name = document.createElement("strong");
+  name.textContent = p.tool;
+  body.appendChild(name);
+  const args = p.args ? JSON.stringify(p.args) : "{}";
+  body.appendChild(document.createTextNode(`(${args})`));
+  addAgentEntry("tool", body);
+}
+
+function renderAgentToolResult(p) {
+  addAgentEntry("result", p.result || "");
+}
+
+function renderAgentFinding(p) {
+  addAgentEntry("finding", `${p.verdict} — ${p.summary || ""}`);
+
+  const el = els.agent.finding;
+  if (!el) return;
+  el.hidden = false;
+  el.dataset.verdict = p.verdict;
+
+  if (els.agent.findingVerdict) {
+    els.agent.findingVerdict.dataset.verdict = p.verdict;
+    els.agent.findingVerdict.textContent     = p.verdict.replace("_", " ");
+  }
+  if (els.agent.findingMeta) {
+    els.agent.findingMeta.textContent =
+      `${p.evidence_count ?? 0} evidence frame${(p.evidence_count ?? 0) === 1 ? "" : "s"}` +
+      (p.synthesised ? " · synthesised" : "");
+  }
+  if (els.agent.findingSummary) els.agent.findingSummary.textContent = p.summary || "";
+  if (els.agent.findingReasons) {
+    els.agent.findingReasons.replaceChildren();
+    for (const r of (p.reasons || [])) {
+      const li = document.createElement("li");
+      li.textContent = r;
+      els.agent.findingReasons.appendChild(li);
+    }
+  }
+}
+
+eventHandlers["agent_state"]       = renderAgentState;
+eventHandlers["agent_message"]     = renderAgentMessage;
+eventHandlers["agent_tool_call"]   = renderAgentToolCall;
+eventHandlers["agent_tool_result"] = renderAgentToolResult;
+eventHandlers["agent_finding"]     = renderAgentFinding;
+
+eventHandlers["agent_skipped"] = (p) => {
+  log("warn", `agent auto-trigger skipped: ${p.reason} (trigger=${p.trigger || "?"})`);
+};
+
+// ----------------------------- incident banner ----------------------------- //
+
+function renderIncident(p) {
+  if (!els.banner.root) return;
+  els.banner.root.hidden = false;
+  const v = p.verdict || "unknown";
+  els.banner.root.dataset.verdict = v;
+  if (els.banner.verdict) {
+    els.banner.verdict.dataset.verdict = v;
+    els.banner.verdict.textContent     = v.replace("_", " ");
+  }
+  if (els.banner.title)   els.banner.title.textContent   = p.title || "Incident";
+  if (els.banner.summary) els.banner.summary.textContent = p.summary || "";
+  if (els.banner.meta) {
+    els.banner.meta.textContent =
+      `${p.evidence?.length ?? 0} evidence · ${p.notified_dept ? "DISPATCHED" : "no dispatch"}`;
+  }
+  const lvl = v === "real_fire" ? "error" : (v === "false_alarm" ? "warn" : "info");
+  log(lvl, `incident ${v}: ${p.summary || p.title || ""}`);
+}
+
+eventHandlers["incident"] = renderIncident;
+
+eventHandlers["webhook_delivery"] = (p) => {
+  if (p.error) log("error", `webhook -> ${p.url}: ${p.error}`);
+  else         log("info",  `webhook -> ${p.url}: ${p.status}`);
+};
+
+if (els.banner.dismiss) {
+  els.banner.dismiss.addEventListener("click", () => {
+    els.banner.root.hidden = true;
+  });
+}
+
+// On load, fetch the most recent incident (if any) so reloading the
+// page doesn't lose the banner that was on screen a moment ago.
+(async function loadLatestIncident() {
+  try {
+    const res = await fetch("/api/incidents/latest");
+    const data = await res.json();
+    if (data.incident) renderIncident(data.incident);
+  } catch (_) { /* offline ok */ }
+})();
+
+if (els.agent.start) {
+  els.agent.start.addEventListener("click", async () => {
+    if (!state.connected) {
+      log("warn", "agent: connect to the drone first");
+      return;
+    }
+    els.agent.start.disabled = true;
+    try {
+      const res = await fetch("/api/agent/start?trigger=manual", { method: "POST" });
+      const data = await res.json();
+      if (data.error) log("error", `agent start: ${data.error}`);
+    } catch (err) {
+      log("error", `agent start: ${err}`);
+    } finally {
+      setTimeout(() => { els.agent.start.disabled = false; }, 2000);
+    }
+  });
+}
+
+if (els.vision.btn) {
+  els.vision.btn.addEventListener("click", async () => {
+    els.vision.btn.disabled = true;
+    els.vision.btn.textContent = "Analyzing...";
+    els.vision.error.hidden = true;
+    try {
+      const res = await fetch("/api/vision/analyze", { method: "POST" });
+      const data = await res.json();
+      if (data.error) {
+        els.vision.error.hidden = false;
+        els.vision.error.textContent = data.error;
+        log("error", `vision: ${data.error}`);
+      } else {
+        renderVisionResult({ source: "manual", ...data });
+      }
+    } catch (err) {
+      els.vision.error.hidden = false;
+      els.vision.error.textContent = String(err);
+      log("error", `vision: ${err}`);
+    } finally {
+      els.vision.btn.disabled = false;
+      els.vision.btn.textContent = "Analyze current view";
+    }
+  });
+}
+
 // ----------------------------- boot ---------------------------------- //
 
 log("info", "dashboard loaded");
 connectTelemetryWs();
 connectControlWs();
+connectEventsWs();
