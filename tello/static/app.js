@@ -44,6 +44,37 @@ const els = {
     sz:       $("t-sz"),
     temp:     $("t-temp"),
   },
+  // operator-console additions (all optional — handlers null-check before use)
+  mission: {
+    pill:  $("mission-pill"),
+    label: $("mission-label"),
+  },
+  ind: {
+    conn:   $("ind-conn"),
+    stream: $("ind-stream"),
+    fly:    $("ind-fly"),
+  },
+  hud: {
+    battery:  $("hud-battery"),
+    altitude: $("hud-altitude"),
+    flight:   $("hud-flight"),
+    link:     $("hud-link"),
+    feed:     $("hud-feed"),
+    airborne: $("hud-airborne"),
+    velocity: $("hud-velocity"),
+    vx:       $("hud-vx"),
+    vy:       $("hud-vy"),
+    vz:       $("hud-vz"),
+    vyaw:     $("hud-vyaw"),
+  },
+  vel: {
+    box:  $("vel-readout"),
+    vx:   $("vel-vx"),
+    vy:   $("vel-vy"),
+    vz:   $("vel-vz"),
+    yaw:  $("vel-yaw"),
+  },
+  batteryBar: $("battery-bar"),
 };
 
 const state = {
@@ -51,7 +82,48 @@ const state = {
   streaming: false,
   flying: false,
   controlWs: null,
+  emergency: false,
 };
+
+// Map data-hold-key value -> array of matching button elements, so we can
+// add/remove the .held class when the operator presses/releases.
+const holdKeyButtons = new Map();
+document.querySelectorAll("[data-hold-key]").forEach((btn) => {
+  const code = btn.dataset.holdKey;
+  if (!holdKeyButtons.has(code)) holdKeyButtons.set(code, []);
+  holdKeyButtons.get(code).push(btn);
+});
+
+function setButtonHeld(code, on) {
+  const btns = holdKeyButtons.get(code);
+  if (!btns) return;
+  for (const b of btns) b.classList.toggle("held", !!on);
+}
+
+// Mirror the connected/streaming/flying/emergency flags onto the mission
+// pill and indicator dots. Single source of truth for the redesigned chrome.
+function updateMissionState() {
+  let stateKey = "idle";
+  let label    = "Idle";
+  if (state.emergency)      { stateKey = "emergency"; label = "Emergency"; }
+  else if (state.flying)    { stateKey = "flight";    label = "In Flight"; }
+  else if (state.connected) { stateKey = "armed";     label = "Armed"; }
+
+  if (els.mission.pill)  els.mission.pill.dataset.state = stateKey;
+  if (els.mission.label) els.mission.label.textContent  = label;
+
+  setIndicator(els.ind.conn,   state.connected);
+  setIndicator(els.ind.stream, state.streaming);
+  setIndicator(els.ind.fly,    state.flying);
+  setIndicator(els.hud.link,     state.connected);
+  setIndicator(els.hud.feed,     state.streaming);
+  setIndicator(els.hud.airborne, state.flying);
+}
+
+function setIndicator(el, on) {
+  if (!el) return;
+  el.dataset.on = on ? "true" : "false";
+}
 
 // ------------------------------ logging ------------------------------- //
 
@@ -149,6 +221,10 @@ function handleTelemetry(snap) {
     els.t.battery.classList.remove("low-batt");
   }
 
+  updateBatteryBar(t.battery_pct);
+  mirrorHud(t);
+  updateMissionState();
+
   els.status.textContent = snap.last_status || "—";
 
   if (snap.last_error) {
@@ -180,6 +256,29 @@ function setNum(el, v) {
   } else {
     el.textContent = v;
   }
+}
+
+function updateBatteryBar(pct) {
+  if (!els.batteryBar) return;
+  const fill = els.batteryBar.querySelector(".fill");
+  if (!fill) return;
+  if (typeof pct !== "number" || pct < 0) {
+    fill.style.width = "0%";
+    els.batteryBar.classList.remove("low");
+    return;
+  }
+  const clamped = Math.max(0, Math.min(100, pct));
+  fill.style.width = `${clamped}%`;
+  els.batteryBar.classList.toggle("low", clamped > 0 && clamped < 15);
+}
+
+// Mirror a subset of telemetry into the glass HUD overlay on the video.
+// Uses the same source data as the side-pane telemetry grid so the two
+// stay in lockstep at the 5 Hz the server pushes.
+function mirrorHud(t) {
+  setNum(els.hud.battery,  t.battery_pct);
+  setNum(els.hud.altitude, t.tof_cm);
+  setNum(els.hud.flight,   t.flight_time_s);
 }
 
 // ----------------------- control WebSocket --------------------------- //
@@ -272,22 +371,45 @@ function recomputeVelocity() {
   }
   lastSentVel = { lr, fb, ud, yaw };
   sendCommand({ action: "set_velocity", lr, fb, ud, yaw });
+  paintVelocity(lr, fb, ud, yaw);
+}
+
+// Paint the velocity vector into the side-pane readout and the video HUD
+// inset. Maps lr -> vx (right+), fb -> vy (forward+), ud -> vz (up+),
+// yaw -> ω. Same data the drone gets; we just surface it visually so the
+// operator can see what's been sent.
+function paintVelocity(lr, fb, ud, yaw) {
+  if (els.vel.vx)  els.vel.vx.textContent  = lr;
+  if (els.vel.vy)  els.vel.vy.textContent  = fb;
+  if (els.vel.vz)  els.vel.vz.textContent  = ud;
+  if (els.vel.yaw) els.vel.yaw.textContent = yaw;
+  if (els.hud.vx)   els.hud.vx.textContent   = lr;
+  if (els.hud.vy)   els.hud.vy.textContent   = fb;
+  if (els.hud.vz)   els.hud.vz.textContent   = ud;
+  if (els.hud.vyaw) els.hud.vyaw.textContent = yaw;
+
+  const moving = (lr || fb || ud || yaw) !== 0;
+  if (els.vel.box)      els.vel.box.classList.toggle("active", moving);
+  if (els.hud.velocity) els.hud.velocity.classList.toggle("active", moving);
 }
 
 function holdKeyDown(code) {
   if (!HOLD_KEYS.has(code) || heldKeys.has(code)) return;
   heldKeys.add(code);
+  setButtonHeld(code, true);
   recomputeVelocity();
 }
 
 function holdKeyUp(code) {
   if (!heldKeys.has(code)) return;
   heldKeys.delete(code);
+  setButtonHeld(code, false);
   recomputeVelocity();
 }
 
 function clearHeldKeys() {
   if (heldKeys.size === 0) return;
+  for (const code of heldKeys) setButtonHeld(code, false);
   heldKeys.clear();
   recomputeVelocity();
 }
@@ -320,10 +442,25 @@ els.disconnect.addEventListener("click", async () => {
 });
 
 els.emergency.addEventListener("click", () => {
-  log("error", "EMERGENCY — cutting motors");
-  clearHeldKeys();
+  triggerEmergencyUi();
   sendCommand({ action: "emergency" });
 });
+
+// Visual-only side effect of the emergency action: log it, drop all held
+// keys, flip the mission pill red, then auto-clear the flag after a few
+// seconds so the pill returns to idle/armed once the operator regains
+// control. The actual motor cut is handled server-side by the command.
+function triggerEmergencyUi() {
+  log("error", "EMERGENCY — cutting motors");
+  clearHeldKeys();
+  state.emergency = true;
+  updateMissionState();
+  clearTimeout(triggerEmergencyUi._t);
+  triggerEmergencyUi._t = setTimeout(() => {
+    state.emergency = false;
+    updateMissionState();
+  }, 4000);
+}
 
 // Discrete one-shot actions (takeoff, land, flips).
 document.querySelectorAll("[data-action]").forEach((btn) => {
@@ -374,7 +511,7 @@ window.addEventListener("keydown", (e) => {
   const oneShot = ONE_SHOT_KEYS[e.code];
   if (oneShot && !e.repeat) {
     e.preventDefault();
-    if (oneShot.action === "emergency") clearHeldKeys();
+    if (oneShot.action === "emergency") triggerEmergencyUi();
     sendCommand(oneShot);
   }
 });

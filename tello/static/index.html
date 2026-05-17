@@ -3,24 +3,49 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FireDrone — Tello Dashboard</title>
+  <title>FireDrone — Tello Operator Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark"></span>
-      <span class="brand-name">FireDrone <em>·</em> Tello</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="square">
+          <line x1="3" y1="4.5" x2="13" y2="4.5" />
+          <line x1="3" y1="8" x2="13" y2="8" />
+          <line x1="3" y1="11.5" x2="13" y2="11.5" />
+        </svg>
+      </span>
+      <span class="brand-name">Firedrone <em>·</em> Tello</span>
     </div>
 
-    <div class="status-cluster">
+    <div class="mission-cluster">
+      <span id="mission-pill" class="mission-pill" data-state="idle">
+        <span class="pill-dot"></span>
+        <span id="mission-label">Idle</span>
+      </span>
+
+      <span class="indicator-dots">
+        <span id="ind-conn"   class="ind" data-on="false"><span class="d"></span>link</span>
+        <span id="ind-stream" class="ind" data-on="false"><span class="d"></span>feed</span>
+        <span id="ind-fly"    class="ind" data-on="false"><span class="d"></span>air</span>
+      </span>
+    </div>
+
+    <!-- Legacy status badges remain so existing JS keeps writing into them.
+         They are visually hidden via .status-cluster { display: none } in CSS;
+         their state is mirrored into the mission pill + indicator dots. -->
+    <div class="status-cluster" aria-hidden="true">
       <span id="status-conn"   class="badge badge-gray">disconnected</span>
       <span id="status-stream" class="badge badge-gray">stream off</span>
       <span id="status-fly"    class="badge badge-gray">grounded</span>
     </div>
 
     <button id="btn-emergency" class="btn btn-emergency" title="Cut motors (Esc)">
-      EMERGENCY
+      Emergency stop
     </button>
   </header>
 
@@ -28,8 +53,38 @@
     <section class="video-pane">
       <div class="video-frame">
         <img id="video" alt="Tello live video feed" />
+
+        <!-- HUD insets (purely visual; data is mirrored from telemetry via JS) -->
+        <div class="video-hud hud-callsign" aria-hidden="true">
+          <div class="callsign">Tello · Unit 01</div>
+          <dl class="hud-grid">
+            <dt>Batt</dt><dd><span id="hud-battery">—</span>%</dd>
+            <dt>Alt</dt> <dd><span id="hud-altitude">—</span> cm</dd>
+            <dt>Time</dt><dd><span id="hud-flight">—</span> s</dd>
+          </dl>
+        </div>
+
+        <div class="video-hud hud-status" aria-hidden="true">
+          <div class="hud-label">Telemetry</div>
+          <div class="hud-rows">
+            <span id="hud-link"     class="hud-row" data-on="false">link <span class="d"></span></span>
+            <span id="hud-feed"     class="hud-row" data-on="false">feed <span class="d"></span></span>
+            <span id="hud-airborne" class="hud-row" data-on="false">airborne <span class="d"></span></span>
+          </div>
+        </div>
+
+        <div class="video-hud hud-velocity" id="hud-velocity" aria-hidden="true">
+          <div class="hud-label">Velocity vector</div>
+          <div class="vel-row">
+            <span><span class="k">vx</span><span id="hud-vx" class="v">0</span></span>
+            <span><span class="k">vy</span><span id="hud-vy" class="v">0</span></span>
+            <span><span class="k">vz</span><span id="hud-vz" class="v">0</span></span>
+            <span><span class="k">yaw</span><span id="hud-vyaw" class="v">0</span></span>
+          </div>
+        </div>
+
         <div id="video-overlay" class="video-overlay">
-          <div class="video-overlay-text">No video yet. Click Connect.</div>
+          <div class="video-overlay-text">Standby — click connect</div>
         </div>
       </div>
     </section>
@@ -46,18 +101,24 @@
 
       <section class="card">
         <h2 class="card-title">Telemetry</h2>
+
+        <div class="battery-row">
+          <span class="battery-label">Battery</span>
+          <span class="battery-value"><span id="t-battery">—</span><span class="unit">%</span></span>
+          <div id="battery-bar" class="battery-bar"><div class="fill"></div></div>
+        </div>
+
         <dl class="telemetry-grid">
-          <dt>Battery</dt>     <dd><span id="t-battery">—</span> %</dd>
-          <dt>Height (ToF)</dt><dd><span id="t-tof">—</span> cm</dd>
+          <dt>Height (ToF)</dt> <dd><span id="t-tof">—</span> cm</dd>
           <dt>Height (baro)</dt><dd><span id="t-height">—</span> cm</dd>
-          <dt>Flight time</dt> <dd><span id="t-flight">—</span> s</dd>
-          <dt>Yaw</dt>         <dd><span id="t-yaw">—</span> °</dd>
-          <dt>Pitch / Roll</dt><dd><span id="t-pitch">—</span> / <span id="t-roll">—</span> °</dd>
-          <dt>Speed (x/y/z)</dt><dd><span id="t-sx">—</span> / <span id="t-sy">—</span> / <span id="t-sz">—</span></dd>
-          <dt>Temperature</dt> <dd><span id="t-temp">—</span> °C</dd>
+          <dt>Flight time</dt>  <dd><span id="t-flight">—</span> s</dd>
+          <dt>Yaw</dt>          <dd><span id="t-yaw">—</span>°</dd>
+          <dt>Pitch / Roll</dt> <dd><span id="t-pitch">—</span> / <span id="t-roll">—</span>°</dd>
+          <dt>Speed x/y/z</dt>  <dd><span id="t-sx">—</span> / <span id="t-sy">—</span> / <span id="t-sz">—</span></dd>
+          <dt>Temp</dt>         <dd><span id="t-temp">—</span>°C</dd>
         </dl>
         <div class="status-line">
-          <span class="muted">last status:</span>
+          <span class="muted">last status</span>
           <span id="t-status">—</span>
         </div>
       </section>
@@ -71,7 +132,7 @@
       </section>
 
       <section class="card">
-        <h2 class="card-title">Motion <span class="muted">(hold to fly)</span></h2>
+        <h2 class="card-title">Motion <span class="muted">hold to fly</span></h2>
         <div class="pad pad-translate">
           <button class="btn pad-btn" data-hold-key="KeyW"     ><kbd>W</kbd> fwd</button>
           <button class="btn pad-btn" data-hold-key="KeyA"     ><kbd>A</kbd> left</button>
@@ -81,18 +142,25 @@
           <button class="btn pad-btn" data-hold-key="ShiftLeft"><kbd>⇧</kbd> down</button>
         </div>
         <div class="row">
-          <button class="btn" data-hold-key="KeyQ"><kbd>Q</kbd> ⟲ yaw L</button>
-          <button class="btn" data-hold-key="KeyE"><kbd>E</kbd> ⟳ yaw R</button>
+          <button class="btn pad-btn" data-hold-key="KeyQ"><kbd>Q</kbd> yaw L</button>
+          <button class="btn pad-btn" data-hold-key="KeyE"><kbd>E</kbd> yaw R</button>
+        </div>
+
+        <div id="vel-readout" class="vel-readout" aria-live="polite">
+          <span><span class="k">vx</span><span id="vel-vx" class="v">0</span></span>
+          <span><span class="k">vy</span><span id="vel-vy" class="v">0</span></span>
+          <span><span class="k">vz</span><span id="vel-vz" class="v">0</span></span>
+          <span><span class="k">yaw</span><span id="vel-yaw" class="v">0</span></span>
         </div>
       </section>
 
       <section class="card">
-        <h2 class="card-title">Flips <span class="muted">(needs &gt; 50% batt)</span></h2>
+        <h2 class="card-title">Flips <span class="muted">batt &gt; 50%</span></h2>
         <div class="row row-wrap">
-          <button class="btn" data-action="flip" data-direction="f"><kbd>1</kbd> fwd</button>
-          <button class="btn" data-action="flip" data-direction="b"><kbd>2</kbd> back</button>
-          <button class="btn" data-action="flip" data-direction="l"><kbd>3</kbd> left</button>
-          <button class="btn" data-action="flip" data-direction="r"><kbd>4</kbd> right</button>
+          <button class="btn pad-btn" data-action="flip" data-direction="f"><kbd>1</kbd> fwd</button>
+          <button class="btn pad-btn" data-action="flip" data-direction="b"><kbd>2</kbd> back</button>
+          <button class="btn pad-btn" data-action="flip" data-direction="l"><kbd>3</kbd> left</button>
+          <button class="btn pad-btn" data-action="flip" data-direction="r"><kbd>4</kbd> right</button>
         </div>
       </section>
     </aside>
