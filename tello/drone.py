@@ -269,15 +269,23 @@ class Drone:
         self._link_snr_ts: float = 0.0               # monotonic ts of the read
         self._link_rtt_ms: Optional[float] = None    # round-trip time of wifi?
         # Sliding-window history of (mono_ts, state_packets_total,
-        # video_errors_total). Sampled at 2 Hz; ~5 sec window is enough to
-        # smooth out the noise without lagging operator perception.
-        self._link_history: deque[tuple[float, int, int]] = deque(maxlen=10)
+        # video_errors_total). Sampled at 5 Hz from the telemetry loop; the
+        # 25-entry cap gives a ~5 s window. Anything shorter is too noisy:
+        # state packets arrive with enough jitter that a 2 s window shows
+        # spurious 20-30% "loss" even on a perfectly healthy link, which
+        # would constantly trip the fence.
+        self._link_history: deque[tuple[float, int, int]] = deque(maxlen=25)
 
         # Soft geofence tier — evaluated on every telemetry tick from the
         # link metrics above. ``_fence_land_triggered`` latches True after
         # an automatic land is dispatched so we don't keep firing it.
+        # ``_fence_pending_*`` debounces tier changes so a single noisy
+        # tick can't flick us into HOVER for a frame and stomp on the
+        # operator's velocity vector.
         self._fence_tier: str = "ok"
         self._fence_land_triggered: bool = False
+        self._fence_pending_tier: str = "ok"
+        self._fence_pending_since: float = 0.0
 
     # ------------------------------------------------------------------ #
     # Context manager
@@ -375,9 +383,15 @@ class Drone:
             self._flying = True
             self._last_status = "TAKEOFF"
             # Re-arm the fence so a previous auto-land doesn't suppress
-            # the safety net on this new flight.
+            # the safety net on this new flight. Also clear the packet
+            # history — state broadcasts pause briefly during takeoff and
+            # we don't want those gaps polluting the new flight's loss
+            # window.
             self._fence_land_triggered = False
             self._fence_tier = "ok"
+            self._fence_pending_tier = "ok"
+            self._fence_pending_since = time.monotonic()
+            self._link_history.clear()
 
     def land(self) -> None:
         with self._lock:
@@ -585,7 +599,11 @@ class Drone:
         if len(self._link_history) >= 2:
             t0, p0, v0 = self._link_history[0]
             dt = now - t0
-            if dt > 0:
+            # Warmup: don't report rates until the window is wide enough to
+            # average out state-packet jitter. With < 3 s of history the
+            # computed loss is wildly noisy and would trip the fence on a
+            # perfectly healthy link.
+            if dt >= self._LINK_WARMUP_SEC:
                 # Tello broadcasts state at ~10 Hz; missed packets translate
                 # directly into observed rate < 10/s.
                 pkt_rate = (packets_total - p0) / dt
@@ -653,6 +671,15 @@ class Drone:
     _FENCE_STALE_LAND   = 3000
     _FENCE_STALE_HOVER  = 1000
 
+    # Minimum seconds of history before packet_loss_pct is reported; below
+    # this the rolling average is too noisy to fence on.
+    _LINK_WARMUP_SEC    = 3.0
+
+    # Sustained-tick window before a candidate tier commits. Filters out
+    # one-tick jitter so an isolated bad sample can't stomp on the
+    # operator's velocity vector for a frame. LAND skips the debounce.
+    _FENCE_DEBOUNCE_SEC = 1.0
+
     def _classify_fence(self, link: dict[str, Any]) -> str:
         snr  = link.get("wifi_snr_db")
         loss = link.get("packet_loss_pct")
@@ -683,15 +710,37 @@ class Drone:
         return "ok"
 
     def _evaluate_fence(self, link: dict[str, Any]) -> str:
-        new_tier = self._classify_fence(link)
-        prev_tier = self._fence_tier
-        if new_tier == prev_tier:
-            return new_tier
+        candidate = self._classify_fence(link)
+        now = time.monotonic()
 
-        self._fence_tier = new_tier
-        # Side effects fire on tier *change* only. The operator can
-        # therefore re-pilot the drone after a fence-hover with a fresh
-        # key press; we do not re-zero on every tick.
+        # Track how long the candidate has been stable. A fresh candidate
+        # resets the timer; a steady one accumulates dwell time.
+        if candidate != self._fence_pending_tier:
+            self._fence_pending_tier = candidate
+            self._fence_pending_since = now
+
+        # Nothing to do if the candidate matches the committed tier.
+        if candidate == self._fence_tier:
+            return self._fence_tier
+
+        # LAND fires immediately — its trigger criteria already amount to
+        # "the link is essentially dead", so debouncing it is unsafe.
+        # Everything else (HOVER / CAUTION / OK) only commits after the
+        # candidate has held steady for FENCE_DEBOUNCE_SEC.
+        debounce = 0.0 if candidate == "land" else self._FENCE_DEBOUNCE_SEC
+        if (now - self._fence_pending_since) < debounce:
+            return self._fence_tier
+
+        prev_tier = self._fence_tier
+        self._fence_tier = candidate
+        self._apply_fence_transition(prev_tier, candidate)
+        return candidate
+
+    def _apply_fence_transition(self, prev_tier: str, new_tier: str) -> None:
+        """Side effects for entering a new fence tier. Fired exactly once
+        per *committed* tier change (after debouncing), so the operator can
+        re-pilot after a HOVER without us re-zeroing on every tick.
+        """
         if new_tier == "hover" and self._flying:
             logger.warning("link fence: HOVER (prev=%s) — zeroing velocity", prev_tier)
             with self._lock:
@@ -714,8 +763,6 @@ class Drone:
             logger.info("link fence: recovered to %s (was %s)", new_tier, prev_tier)
             with self._lock:
                 self._last_status = f"FENCE {new_tier.upper()} (link recovered)"
-
-        return new_tier
 
     def _safe_fence_land(self) -> None:
         """Run the fence-triggered land on a worker thread.
