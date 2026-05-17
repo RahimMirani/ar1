@@ -198,7 +198,7 @@
         </div>
         <div class="audio-meter">
           <div class="audio-meter-row">
-            <span class="audio-meter-label">3 kHz band</span>
+            <span class="audio-meter-label">tonality</span>
             <div id="audio-meter-band" class="audio-meter-bar"><div class="fill"></div></div>
             <span id="audio-meter-band-db" class="audio-meter-val">—</span>
           </div>
@@ -208,7 +208,13 @@
             <span id="audio-meter-broad-db" class="audio-meter-val">—</span>
           </div>
         </div>
-        <div id="audio-status-line" class="status-line">
+        <div class="audio-info-line">
+          <span class="muted">peak</span>
+          <span id="audio-peak-freq">—</span>
+          <span class="muted">·</span>
+          <span class="muted">pulses</span>
+          <span id="audio-pulses">0</span>
+          <span class="muted">·</span>
           <span class="muted">device</span>
           <span id="audio-device">—</span>
         </div>

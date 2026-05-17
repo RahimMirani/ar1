@@ -53,12 +53,15 @@ async def main(duration: float) -> int:
                 continue
             t = ev.get("type")
             if t == "audio_level":
-                band = ev.get("alarm_band_db")
-                broad = ev.get("broadband_db")
-                state = ev.get("state")
+                tonality = ev.get("tonality_db")
+                broad    = ev.get("broadband_db")
+                peak     = ev.get("peak_freq_hz")
+                pulses   = ev.get("pulses_recent")
+                state    = ev.get("state")
                 print(
-                    f"level  band={band:+6.1f} dB  broad={broad:+6.1f} dB  "
-                    f"state={state}",
+                    f"level  tonality={tonality:+6.1f} dB  "
+                    f"peak={peak:7.1f} Hz  pulses={pulses}  "
+                    f"broad={broad:+6.1f} dB  state={state}",
                     flush=True,
                 )
             elif t == "audio_alarm":

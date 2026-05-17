@@ -104,6 +104,8 @@ const els = {
     bandDb:   $("audio-meter-band-db"),
     broad:    $("audio-meter-broad"),
     broadDb:  $("audio-meter-broad-db"),
+    peakFreq: $("audio-peak-freq"),
+    pulses:   $("audio-pulses"),
     device:   $("audio-device"),
     error:    $("audio-error"),
   },
@@ -726,10 +728,17 @@ eventHandlers["vision_result"] = renderVisionResult;
 
 // ----------------------------- audio ----------------------------- //
 
-// Map a dBFS reading to a 0-100% bar width. -60 dB -> 0%, 0 dB -> 100%.
+// Map a broadband dBFS reading to a 0-100% bar width. -60 dB -> 0%, 0 dB -> 100%.
 function dbToPct(db) {
   if (db === null || db === undefined || !isFinite(db)) return 0;
   return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+}
+
+// Tonality has its own scale: 0 dB = pure broadband (no tone), 30+ dB = sharp pure tone.
+// We map [0, 35] dB -> [0, 100]% so the bar saturates near an alarm-grade tone.
+function tonalityToPct(db) {
+  if (db === null || db === undefined || !isFinite(db)) return 0;
+  return Math.max(0, Math.min(100, (db / 35) * 100));
 }
 
 function setAudioState(stateKey) {
@@ -746,15 +755,24 @@ function setAudioState(stateKey) {
 }
 
 function renderAudioLevel(p) {
+  // Top bar: tonality (peak-prominence) — the real discriminator.
   if (els.audio.band) {
-    els.audio.band.querySelector(".fill").style.width = `${dbToPct(p.alarm_band_db)}%`;
-    els.audio.bandDb.textContent = (typeof p.alarm_band_db === "number")
-      ? `${p.alarm_band_db.toFixed(0)} dB` : "—";
+    els.audio.band.querySelector(".fill").style.width = `${tonalityToPct(p.tonality_db)}%`;
+    els.audio.bandDb.textContent = (typeof p.tonality_db === "number")
+      ? `${p.tonality_db.toFixed(0)} dB` : "—";
   }
+  // Bottom bar: broadband — ambient loudness reference.
   if (els.audio.broad) {
     els.audio.broad.querySelector(".fill").style.width = `${dbToPct(p.broadband_db)}%`;
     els.audio.broadDb.textContent = (typeof p.broadband_db === "number")
       ? `${p.broadband_db.toFixed(0)} dB` : "—";
+  }
+  if (els.audio.peakFreq) {
+    els.audio.peakFreq.textContent = (typeof p.peak_freq_hz === "number")
+      ? `${p.peak_freq_hz.toFixed(0)} Hz` : "—";
+  }
+  if (els.audio.pulses) {
+    els.audio.pulses.textContent = String(p.pulses_recent ?? 0);
   }
 }
 
