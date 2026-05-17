@@ -168,6 +168,16 @@ async def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/dashboard", include_in_schema=False)
+async def dispatcher_dashboard() -> FileResponse:
+    """Read-only firefighter-facing real-time view of the current mission.
+
+    Shares the same ``/ws/events`` event stream and ``/video.mjpg`` as
+    the operator console, but the page itself never sends commands.
+    """
+    return FileResponse(STATIC_DIR / "dashboard.html")
+
+
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
