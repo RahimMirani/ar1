@@ -94,6 +94,18 @@ const els = {
     vz:   $("vel-vz"),
     yaw:  $("vel-yaw"),
   },
+  attitude: {
+    hudRoot:    $("hud-attitude"),
+    horizon:    $("attitude-horizon"),
+    horizonHud: $("attitude-horizon-hud"),
+    compass:    $("attitude-compass"),
+    pitch:      $("att-pitch"),
+    roll:       $("att-roll"),
+    yaw:        $("att-yaw"),
+    pitchHud:   $("att-pitch-hud"),
+    rollHud:    $("att-roll-hud"),
+    yawHud:     $("att-yaw-hud"),
+  },
   batteryBar: $("battery-bar"),
 
   vision: {
@@ -329,6 +341,7 @@ function handleTelemetry(snap) {
   }
 
   updateBatteryBar(t.battery_pct);
+  paintAttitude(t);
   mirrorHud(t);
   if (snap.map_status) paintMapStats(snap.map_status);
   updateMissionState();
@@ -378,6 +391,41 @@ function updateBatteryBar(pct) {
   const clamped = Math.max(0, Math.min(100, pct));
   fill.style.width = `${clamped}%`;
   els.batteryBar.classList.toggle("low", clamped > 0 && clamped < 15);
+}
+
+function clampNum(v, lo, hi) {
+  if (typeof v !== "number" || !Number.isFinite(v)) return 0;
+  return Math.max(lo, Math.min(hi, v));
+}
+
+function paintAttitude(t) {
+  const pitch = clampNum(t.pitch_deg, -45, 45);
+  const roll  = clampNum(t.roll_deg, -60, 60);
+  const yaw   = clampNum(t.yaw_deg, -180, 180);
+
+  setNum(els.attitude.pitch, t.pitch_deg);
+  setNum(els.attitude.roll,  t.roll_deg);
+  setNum(els.attitude.yaw,   t.yaw_deg);
+  setNum(els.attitude.pitchHud, t.pitch_deg);
+  setNum(els.attitude.rollHud,  t.roll_deg);
+  setNum(els.attitude.yawHud,   t.yaw_deg);
+
+  const horizonTransform = `rotate(${-roll}deg) translateY(${pitch * 0.9}px)`;
+  if (els.attitude.horizon) {
+    els.attitude.horizon.style.transform = horizonTransform;
+  }
+  if (els.attitude.horizonHud) {
+    els.attitude.horizonHud.style.transform = horizonTransform;
+  }
+  if (els.attitude.compass) {
+    els.attitude.compass.style.transform = `rotate(${-yaw}deg)`;
+  }
+}
+
+function setAttitudeAutonomy(on) {
+  if (els.attitude.hudRoot) {
+    els.attitude.hudRoot.classList.toggle("autonomous", !!on);
+  }
 }
 
 // Mirror a subset of telemetry into the glass HUD overlay on the video.
@@ -586,6 +634,7 @@ function paintPathHud(lr, fb, yaw, opts = {}) {
 
 function setAutonomyPathIntent(intent, holdMs = 3200) {
   state.autonomy.active = true;
+  setAttitudeAutonomy(true);
   clearTimeout(state.autonomy.intentTimer);
   const lr = Number(intent.lr || 0);
   const fb = Number(intent.fb || 0);
@@ -607,6 +656,7 @@ function setAutonomyPathIntent(intent, holdMs = 3200) {
 
 function clearAutonomyPathIntent() {
   state.autonomy.active = false;
+  setAttitudeAutonomy(false);
   clearTimeout(state.autonomy.intentTimer);
   state.autonomy.intentTimer = null;
   paintPathHud(lastSentVel.lr, lastSentVel.fb, lastSentVel.yaw, {

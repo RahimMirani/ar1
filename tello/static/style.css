@@ -291,10 +291,10 @@ body {
   flex: 1;
   display: grid;
   grid-template-columns: 1fr 340px;
-  grid-template-rows: 1fr 180px;
+  grid-template-rows: 1fr 262px;
   grid-template-areas:
     "video side"
-    "log   side";
+    "deck  deck";
   gap: 12px;
   padding: 12px;
   min-height: 0;
@@ -308,7 +308,20 @@ body {
   gap: 10px;
 }
 .side-pane  { grid-area: side;  overflow-y: auto; padding-right: 4px; }
-.log-pane   { grid-area: log;   min-width: 0; min-height: 0; }
+.operator-deck {
+  grid-area: deck;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 1.25fr) minmax(250px, 0.95fr) minmax(280px, 1fr);
+  gap: 12px;
+}
+.operator-deck > .card,
+.operator-deck > .log-pane {
+  min-width: 0;
+  min-height: 0;
+  margin-bottom: 0;
+}
 
 /* 60/40 split when depth view is enabled; 100/0 when it's off. */
 .video-pane > .video-frame {
@@ -753,6 +766,41 @@ body {
 }
 .hud-velocity.active .vel-row .v { color: var(--accent); }
 
+.hud-attitude {
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 210px;
+}
+.hud-attitude.autonomous {
+  border-color: rgba(245, 158, 11, 0.48);
+}
+.hud-attitude-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.hud-attitude-values {
+  display: grid;
+  gap: 3px;
+  min-width: 82px;
+  font-variant-numeric: tabular-nums;
+}
+.hud-attitude-values span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.hud-attitude-values .k {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.hud-attitude-values .v {
+  color: var(--text);
+  min-width: 30px;
+  text-align: right;
+}
+
 /* ============================ side cards ============================ */
 
 .card {
@@ -889,11 +937,79 @@ body {
 
 /* ============================ motion pad ============================ */
 
+.control-card,
+.attitude-card {
+  display: flex;
+  flex-direction: column;
+}
+.control-card .card-title {
+  margin-bottom: 8px;
+}
+
+.yaw-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.control-pad {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
+  grid-template-rows: repeat(3, 34px);
+  gap: 5px;
+  margin-bottom: 6px;
+}
+.control-pad .pad-btn {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+}
+.control-pad .pad-btn span {
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.control-pad .pad-up      { grid-column: 2; grid-row: 1; }
+.control-pad .pad-left    { grid-column: 1; grid-row: 2; }
+.control-pad .pad-center  { grid-column: 1; grid-row: 3; border-color: rgba(245, 158, 11, 0.32); }
+.control-pad .pad-right   { grid-column: 3; grid-row: 2; }
+.control-pad .pad-down    { grid-column: 2; grid-row: 3; }
+.control-pad .pad-descend { grid-column: 3; grid-row: 3; }
+
+.flight-action-row {
+  margin-top: auto;
+}
+.control-card .btn {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.control-card .vel-readout {
+  margin-top: 6px;
+  padding: 5px 8px;
+}
+
 .pad-translate {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
   margin-bottom: 8px;
+}
+
+.motion-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) 86px;
+  gap: 8px;
+  align-items: stretch;
+}
+.motion-grid .pad-translate {
+  margin-bottom: 0;
+}
+.yaw-column {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 6px;
 }
 
 .pad-btn {
@@ -942,6 +1058,164 @@ body {
   border-color: rgba(245, 158, 11, 0.35);
 }
 .vel-readout.active .v { color: var(--accent); }
+
+/* ============================ IMU attitude ============================ */
+
+.attitude-layout {
+  display: grid;
+  grid-template-columns: 1fr 82px;
+  gap: 12px;
+  align-items: center;
+  min-height: 118px;
+}
+
+.attitude-gauge {
+  position: relative;
+  height: 118px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #0a0a0c;
+}
+.attitude-gauge.mini {
+  width: 80px;
+  height: 52px;
+  flex: 0 0 80px;
+  border-radius: var(--radius-sm);
+}
+.attitude-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.attitude-horizon {
+  position: absolute;
+  left: -18%;
+  top: -45%;
+  width: 136%;
+  height: 190%;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(245, 158, 11, 0.10) 0 49.5%,
+      rgba(255, 255, 255, 0.28) 49.5% 50.5%,
+      rgba(255, 255, 255, 0.06) 50.5% 100%
+    );
+  transform-origin: 50% 50%;
+  transition: transform 140ms linear;
+}
+.attitude-horizon .horizon-line {
+  position: absolute;
+  left: 22%;
+  right: 22%;
+  top: 50%;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.55);
+}
+.attitude-gauge.mini .attitude-horizon {
+  left: -28%;
+  top: -75%;
+  width: 156%;
+  height: 250%;
+}
+
+.attitude-airframe {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 82px;
+  height: 22px;
+  transform: translate(-50%, -50%);
+}
+.attitude-gauge.mini .attitude-airframe {
+  transform: translate(-50%, -50%) scale(0.72);
+}
+.attitude-airframe .wing {
+  position: absolute;
+  top: 10px;
+  width: 32px;
+  height: 2px;
+  background: var(--accent);
+}
+.attitude-airframe .left { right: 50px; }
+.attitude-airframe .right { left: 50px; }
+.attitude-airframe .nose {
+  position: absolute;
+  left: 50%;
+  top: 5px;
+  width: 9px;
+  height: 9px;
+  border-left: 2px solid var(--accent);
+  border-top: 2px solid var(--accent);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.attitude-heading {
+  position: relative;
+  width: 82px;
+  height: 82px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.20);
+  overflow: hidden;
+}
+.attitude-compass {
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  transition: transform 140ms linear;
+}
+.attitude-compass span {
+  position: absolute;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.attitude-compass .north { top: 2px; left: 50%; transform: translateX(-50%); color: var(--accent); }
+.attitude-compass .east  { right: 4px; top: 50%; transform: translateY(-50%); }
+.attitude-compass .south { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.attitude-compass .west  { left: 4px; top: 50%; transform: translateY(-50%); }
+.heading-pointer {
+  position: absolute;
+  left: 50%;
+  top: 7px;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 9px solid var(--bad);
+}
+
+.attitude-values {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+.attitude-values > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+}
+.attitude-values .k {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+.attitude-values .v {
+  color: var(--text);
+}
 
 /* ============================ event log ============================ */
 
@@ -1003,16 +1277,41 @@ body {
 .event-log .lvl-warn  { color: var(--warn); }
 .event-log .lvl-error { color: var(--bad); }
 
+.operator-deck .log-header {
+  padding: 8px 10px;
+}
+.operator-deck .event-log {
+  font-size: 11.5px;
+}
+.operator-deck .event-log li {
+  grid-template-columns: 58px 42px 1fr;
+  gap: 8px;
+  padding: 3px 10px;
+}
+.operator-deck .event-log .ts {
+  font-size: 10.5px;
+}
+.operator-deck .event-log .lvl {
+  font-size: 10px;
+}
+
 /* ============================ responsive ============================ */
 
 @media (max-width: 1100px) {
   .layout {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(360px, 1fr) auto 180px;
+    grid-template-rows: minmax(360px, 1fr) auto auto;
     grid-template-areas:
       "video"
       "side"
-      "log";
+      "deck";
+  }
+  .operator-deck {
+    grid-template-columns: 1fr 1fr;
+  }
+  .operator-deck .log-pane {
+    grid-column: 1 / -1;
+    min-height: 150px;
   }
   .side-pane {
     max-height: none;
@@ -1029,6 +1328,16 @@ body {
 
 @media (max-width: 720px) {
   .video-hud { display: none; }
+  .operator-deck {
+    grid-template-columns: 1fr;
+  }
+  .motion-grid {
+    grid-template-columns: 1fr;
+  }
+  .yaw-column {
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: none;
+  }
 }
 
 /* ============================ AI panels ============================ *

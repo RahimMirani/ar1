@@ -24,7 +24,7 @@ A first version of this module looked for *sustained* energy in
 tone exist) but did happily trip on TV sibilants, keyboard clicks, and
 microwave beeps. This rewrite fixes both ends:
 
-1. Every block, we compute the **spectral peak inside a tight 2.7-3.5
+1. Every block, we compute the **spectral peak inside a 2.5-4.2
    kHz window** and the *tonality* — peak height vs the in-band mean
    with the peak bin notched out. A pure sinusoid gives ``tonality_db
    >> 20``; broadband sounds give ``tonality_db < 10``. This is what
@@ -39,6 +39,9 @@ microwave beeps. This rewrite fixes both ends:
      whose peak frequencies agree to within ``PULSE_FREQ_TOLERANCE_HZ``.
      This locks onto a real alarm by the second beep — ~1.5 s after
      the first beep starts.
+   * **Recorded playback:** phone / YouTube alarm clips are often quieter
+     at the laptop mic, so a second path accepts lower absolute level only
+     when the tone is very pure and repeated/sustained.
    * **Continuous-tone:** a single strong tone (``tonality_db >=
      STRONG_TONE_DB``) sustained for ``STRONG_TONE_HOLD_SEC``. Catches
      phone recordings and older non-T3 alarms in ~0.6 s.
@@ -85,10 +88,10 @@ logger = logging.getLogger("tello.audio")
 SAMPLE_RATE    = 16_000          # mono 16 kHz; well above the alarm Nyquist
 BLOCK_SAMPLES  = 1024            # 64 ms per stream read
 WINDOW_SAMPLES = 4096            # 256 ms rolling FFT window
-# Tighter than before. UL-217 smoke alarms target 3.0-3.2 kHz; CO alarms
-# (UL-2034) sit in the same range. Anything outside this band is almost
-# certainly not a residential alarm and would just add false positives.
-ALARM_PEAK_BAND_HZ = (2700.0, 3500.0)
+# UL-217 smoke alarms target ~3.0-3.2 kHz and CO alarms (UL-2034) sit in
+# the same range. We keep a little margin because YouTube / phone playback
+# can be pitch shifted by speakers, compression, and room reflections.
+ALARM_PEAK_BAND_HZ = (2500.0, 4200.0)
 # Half-width (in bins) around the detected peak to *exclude* from the
 # in-band mean when computing tonality. ~2 bins at 4096-sample FFT @
 # 16 kHz = ±8 Hz, which is enough to remove the peak's own skirt without
@@ -105,9 +108,15 @@ LEVEL_PUBLISH_HZ = 5.0
 # discriminator that says "this is a tone, not broadband"; the frequency
 # range constrains us to the alarm band. Tuned against speech, sibilants,
 # keyboard clicks, microwave beeps, and music — none of those produce
-# 18 dB of in-band peak prominence in 2.7-3.5 kHz.
-PEAK_FLOOR_DBFS   = -55.0
+# 18 dB of in-band peak prominence in the alarm band.
+PEAK_FLOOR_DBFS   = -50.0
 TONALITY_DB       = 18.0
+
+# Recorded phone/YouTube playback can hit the microphone much quieter than
+# a real alarm. Keep this path stricter on tonality so random quiet sounds
+# do not count just because we lowered the absolute loudness floor.
+PLAYBACK_PEAK_FLOOR_DBFS = -62.0
+PLAYBACK_TONALITY_DB     = 24.0
 
 # --- pulse segmentation --------------------------------------------------- #
 # A pulse is a stretch of consecutive tonal frames. We accept any pulse
@@ -129,8 +138,13 @@ PULSE_WINDOW_SEC = 2.5
 # random musical sustains don't trip us.
 STRONG_TONE_DB       = 25.0
 STRONG_TONE_HOLD_SEC = 0.60
+PLAYBACK_STRONG_TONE_HOLD_SEC = 1.00
 
 # --- state-machine hysteresis --------------------------------------------- #
+# How long a detector trigger must remain valid before we commit to alarm
+# mode. This filters one-off YouTube/speaker chirps and brief false matches;
+# the Simulate button still bypasses this because it is an operator intent.
+ALARM_COMMIT_SEC = 1.5
 # How long the alarm has to be gone before we drop back to "armed". T3
 # has a 1.5 s rest between groups, so 2.5 s gives margin.
 ALARM_CLEAR_SEC = 2.5
@@ -298,8 +312,11 @@ class AudioMonitor:
         pulse_freqs: list[float] = []
 
         strong_tone_start: float | None = None
+        alarm_candidate_since: float | None = None
+        alarm_candidate_reason = ""
         clear_since: float | None = None
         last_publish = 0.0
+        strong_tone_hold_sec = STRONG_TONE_HOLD_SEC
 
         while not self._stop_event.is_set():
             try:
@@ -345,9 +362,15 @@ class AudioMonitor:
                 and tonality_db >= TONALITY_DB
                 and ALARM_PEAK_BAND_HZ[0] <= peak_freq <= ALARM_PEAK_BAND_HZ[1]
             )
+            is_playback_tone = (
+                peak_db >= PLAYBACK_PEAK_FLOOR_DBFS
+                and tonality_db >= PLAYBACK_TONALITY_DB
+                and ALARM_PEAK_BAND_HZ[0] <= peak_freq <= ALARM_PEAK_BAND_HZ[1]
+            )
+            is_alarm_tone = is_tone or is_playback_tone
 
             # --- pulse segmentation ------------------------------------- #
-            if is_tone:
+            if is_alarm_tone:
                 if not in_pulse:
                     in_pulse = True
                     pulse_start = now
@@ -371,8 +394,14 @@ class AudioMonitor:
             if is_tone and tonality_db >= STRONG_TONE_DB:
                 if strong_tone_start is None:
                     strong_tone_start = now
+                strong_tone_hold_sec = STRONG_TONE_HOLD_SEC
+            elif is_playback_tone:
+                if strong_tone_start is None:
+                    strong_tone_start = now
+                strong_tone_hold_sec = PLAYBACK_STRONG_TONE_HOLD_SEC
             else:
                 strong_tone_start = None
+                strong_tone_hold_sec = STRONG_TONE_HOLD_SEC
 
             # --- alarm decision: cadence OR continuous OR simulate ------ #
             simulating = now < self._simulate_until
@@ -386,17 +415,34 @@ class AudioMonitor:
                 avg = sum(f for _, f in pulses) / len(pulses)
                 reason = (
                     f"{len(pulses)} matching pulses around {avg:.0f} Hz "
-                    f"(tonality {tonality_db:+.0f} dB)"
+                    f"(tonality {tonality_db:+.0f} dB, peak {peak_db:+.0f} dBFS)"
                 )
-            elif strong_tone_start is not None and (now - strong_tone_start) >= STRONG_TONE_HOLD_SEC:
+            elif (
+                strong_tone_start is not None
+                and (now - strong_tone_start) >= strong_tone_hold_sec
+            ):
                 trigger = True
                 reason = (
                     f"sustained {peak_freq:.0f} Hz tone "
-                    f"(tonality {tonality_db:+.0f} dB)"
+                    f"(tonality {tonality_db:+.0f} dB, peak {peak_db:+.0f} dBFS)"
                 )
 
             # --- state machine ------------------------------------------ #
+            pending_alarm = False
+            if trigger and not simulating:
+                if alarm_candidate_since is None:
+                    alarm_candidate_since = now
+                    alarm_candidate_reason = reason
+                elif reason:
+                    alarm_candidate_reason = reason
+                if (now - alarm_candidate_since) < ALARM_COMMIT_SEC:
+                    trigger = False
+                    pending_alarm = True
+                    reason = alarm_candidate_reason
+
             if trigger:
+                alarm_candidate_since = None
+                alarm_candidate_reason = ""
                 clear_since = None
                 if self._state != "alarm":
                     self._state = "alarm"
@@ -413,6 +459,9 @@ class AudioMonitor:
                         }
                     )
             else:
+                if not simulating and not pending_alarm:
+                    alarm_candidate_since = None
+                    alarm_candidate_reason = ""
                 if self._state == "alarm":
                     if clear_since is None:
                         clear_since = now

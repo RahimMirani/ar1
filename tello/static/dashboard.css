@@ -55,7 +55,7 @@
   /* fixed-height chrome — keeps the dashboard locked to one viewport */
   --h-topbar:   54px;
   --h-banner:   82px;
-  --h-evidence: 260px;
+  --h-mission: 260px;
 }
 
 * { box-sizing: border-box; }
@@ -75,7 +75,7 @@ html, body {
 
 body {
   display: grid;
-  grid-template-rows: var(--h-topbar) var(--h-banner) 1fr var(--h-evidence);
+  grid-template-rows: var(--h-topbar) var(--h-banner) 1fr var(--h-mission);
   overflow: hidden;
 }
 
@@ -246,12 +246,12 @@ body {
   gap: 14px;
   padding: 14px 14px 7px 14px;
   grid-template-columns: 1.65fr 1fr;
-  grid-template-areas: "video mission";
+  grid-template-areas: "video evidence";
   min-height: 0;
 }
 
-.video-card    { grid-area: video;   display: flex; flex-direction: column; min-height: 0; }
-.mission-card  { grid-area: mission; display: flex; flex-direction: column; min-height: 0; }
+.video-card    { grid-area: video;    display: flex; flex-direction: column; min-height: 0; }
+.evidence-card { grid-area: evidence; display: flex; flex-direction: column; min-height: 0; }
 
 .card {
   background: linear-gradient(180deg, var(--glass-top) 0%, var(--glass-bot) 100%);
@@ -719,6 +719,13 @@ body {
 .mission-feed::-webkit-scrollbar-track { background: transparent; }
 .mission-feed::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
 
+body > .mission-card {
+  margin: 0 14px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .feed-entry {
   display: grid;
   grid-template-columns: 56px 1fr;
@@ -743,7 +750,6 @@ body {
 /* ============================ evidence strip ============================ */
 
 .evidence-card {
-  margin: 0 14px 14px 14px;
   background: linear-gradient(180deg, var(--glass-top) 0%, var(--glass-bot) 100%);
   border: 1px solid var(--border);
   border-radius: var(--radius);

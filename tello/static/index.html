@@ -95,6 +95,27 @@
           </div>
         </div>
 
+        <div class="video-hud hud-attitude" id="hud-attitude" aria-hidden="true">
+          <div class="hud-label">IMU attitude</div>
+          <div class="hud-attitude-row">
+            <div class="attitude-gauge mini">
+              <div id="attitude-horizon-hud" class="attitude-horizon">
+                <span class="horizon-line"></span>
+              </div>
+              <div class="attitude-airframe">
+                <span class="wing left"></span>
+                <span class="nose"></span>
+                <span class="wing right"></span>
+              </div>
+            </div>
+            <div class="hud-attitude-values">
+              <span><span class="k">P</span><span id="att-pitch-hud" class="v">—</span>°</span>
+              <span><span class="k">R</span><span id="att-roll-hud" class="v">—</span>°</span>
+              <span><span class="k">Y</span><span id="att-yaw-hud" class="v">—</span>°</span>
+            </div>
+          </div>
+        </div>
+
         <div class="video-hud hud-linkq" id="hud-linkq" data-fence="ok" aria-hidden="true">
           <div class="hud-label">Link</div>
           <dl class="hud-grid">
@@ -189,47 +210,6 @@
         <div class="status-line">
           <span class="muted">last status</span>
           <span id="t-status">—</span>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="card-title">Flight</h2>
-        <div class="row">
-          <button id="btn-takeoff" class="btn btn-primary" data-action="takeoff">Takeoff <kbd>T</kbd></button>
-          <button id="btn-land"    class="btn"             data-action="land">Land <kbd>L</kbd></button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="card-title">Motion <span class="muted">hold to fly</span></h2>
-        <div class="pad pad-translate">
-          <button class="btn pad-btn" data-hold-key="KeyW"     ><kbd>W</kbd> fwd</button>
-          <button class="btn pad-btn" data-hold-key="KeyA"     ><kbd>A</kbd> left</button>
-          <button class="btn pad-btn" data-hold-key="KeyS"     ><kbd>S</kbd> back</button>
-          <button class="btn pad-btn" data-hold-key="KeyD"     ><kbd>D</kbd> right</button>
-          <button class="btn pad-btn" data-hold-key="Space"    ><kbd>␣</kbd> up</button>
-          <button class="btn pad-btn" data-hold-key="ShiftLeft"><kbd>⇧</kbd> down</button>
-        </div>
-        <div class="row">
-          <button class="btn pad-btn" data-hold-key="KeyQ"><kbd>Q</kbd> yaw L</button>
-          <button class="btn pad-btn" data-hold-key="KeyE"><kbd>E</kbd> yaw R</button>
-        </div>
-
-        <div id="vel-readout" class="vel-readout" aria-live="polite">
-          <span><span class="k">vx</span><span id="vel-vx" class="v">0</span></span>
-          <span><span class="k">vy</span><span id="vel-vy" class="v">0</span></span>
-          <span><span class="k">vz</span><span id="vel-vz" class="v">0</span></span>
-          <span><span class="k">yaw</span><span id="vel-yaw" class="v">0</span></span>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="card-title">Flips <span class="muted">batt &gt; 50%</span></h2>
-        <div class="row row-wrap">
-          <button class="btn pad-btn" data-action="flip" data-direction="f"><kbd>1</kbd> fwd</button>
-          <button class="btn pad-btn" data-action="flip" data-direction="b"><kbd>2</kbd> back</button>
-          <button class="btn pad-btn" data-action="flip" data-direction="l"><kbd>3</kbd> left</button>
-          <button class="btn pad-btn" data-action="flip" data-direction="r"><kbd>4</kbd> right</button>
         </div>
       </section>
 
@@ -353,12 +333,71 @@
       </section>
     </aside>
 
-    <section class="log-pane">
-      <header class="log-header">
-        <h2 class="card-title">Event log</h2>
-        <button id="btn-clear-log" class="btn btn-small">clear</button>
-      </header>
-      <ol id="event-log" class="event-log"></ol>
+    <section class="operator-deck">
+      <section class="card control-card">
+        <h2 class="card-title">Manual flight</h2>
+        <div class="yaw-row">
+          <button class="btn pad-btn" data-hold-key="KeyQ"><kbd>Q</kbd> yaw L</button>
+          <button class="btn pad-btn" data-hold-key="KeyE"><kbd>E</kbd> yaw R</button>
+        </div>
+        <div class="pad control-pad">
+          <button class="btn pad-btn pad-up"    data-hold-key="KeyW"     ><kbd>W</kbd><span>fwd</span></button>
+          <button class="btn pad-btn pad-left"  data-hold-key="KeyA"     ><kbd>A</kbd><span>left</span></button>
+          <button class="btn pad-btn pad-center" data-hold-key="Space"   ><kbd>␣</kbd><span>up</span></button>
+          <button class="btn pad-btn pad-right" data-hold-key="KeyD"     ><kbd>D</kbd><span>right</span></button>
+          <button class="btn pad-btn pad-down"  data-hold-key="KeyS"     ><kbd>S</kbd><span>back</span></button>
+          <button class="btn pad-btn pad-descend" data-hold-key="ShiftLeft"><kbd>⇧</kbd><span>down</span></button>
+        </div>
+        <div class="row flight-action-row">
+          <button id="btn-takeoff" class="btn btn-primary" data-action="takeoff">Takeoff <kbd>T</kbd></button>
+          <button id="btn-land"    class="btn"             data-action="land">Land <kbd>L</kbd></button>
+        </div>
+
+        <div id="vel-readout" class="vel-readout" aria-live="polite">
+          <span><span class="k">vx</span><span id="vel-vx" class="v">0</span></span>
+          <span><span class="k">vy</span><span id="vel-vy" class="v">0</span></span>
+          <span><span class="k">vz</span><span id="vel-vz" class="v">0</span></span>
+          <span><span class="k">yaw</span><span id="vel-yaw" class="v">0</span></span>
+        </div>
+      </section>
+
+      <section class="card attitude-card">
+        <h2 class="card-title">IMU attitude</h2>
+        <div class="attitude-layout">
+          <div class="attitude-gauge" aria-hidden="true">
+            <div id="attitude-horizon" class="attitude-horizon">
+              <span class="horizon-line"></span>
+            </div>
+            <div class="attitude-airframe">
+              <span class="wing left"></span>
+              <span class="nose"></span>
+              <span class="wing right"></span>
+            </div>
+          </div>
+          <div class="attitude-heading" aria-hidden="true">
+            <div id="attitude-compass" class="attitude-compass">
+              <span class="north">N</span>
+              <span class="east">E</span>
+              <span class="south">S</span>
+              <span class="west">W</span>
+            </div>
+            <span class="heading-pointer"></span>
+          </div>
+        </div>
+        <div class="attitude-values">
+          <span><span class="k">pitch</span><span id="att-pitch" class="v">—</span>°</span>
+          <span><span class="k">roll</span><span id="att-roll" class="v">—</span>°</span>
+          <span><span class="k">yaw</span><span id="att-yaw" class="v">—</span>°</span>
+        </div>
+      </section>
+
+      <section class="log-pane">
+        <header class="log-header">
+          <h2 class="card-title">Event log</h2>
+          <button id="btn-clear-log" class="btn btn-small">clear</button>
+        </header>
+        <ol id="event-log" class="event-log"></ol>
+      </section>
     </section>
   </main>
 

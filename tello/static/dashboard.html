@@ -121,47 +121,47 @@
       </div>
     </section>
 
-    <section class="card mission-card">
+    <section class="card evidence-card">
       <header class="card-head">
-        <span class="card-title">Mission</span>
-        <span id="mission-pill" class="card-tag" data-state="idle">idle</span>
+        <span class="card-title">Evidence report</span>
+        <span id="evidence-count" class="card-tag">0</span>
       </header>
-
-      <div class="mission-head">
-        <div>
-          <div class="mh-id"      id="mission-id">—</div>
-          <div class="mh-trigger" id="mission-trigger">awaiting trigger</div>
-        </div>
-        <div>
-          <div class="mh-timer"><span id="mission-elapsed">0.0</span><span class="unit">s</span></div>
-          <div class="mh-timer-cap">cap 90.0 s · <span id="mission-evidence-count">0</span> frames</div>
-        </div>
+      <div id="evidence-gallery" class="evidence-gallery">
+        <div class="evidence-empty">Evidence reports the agent captures will appear here in order.</div>
       </div>
-
-      <ol class="stepper" id="mission-stepper">
-        <li class="step" data-phase="trigger" data-status="default">Trigger</li>
-        <li class="step" data-phase="inspect" data-status="default">Inspect</li>
-        <li class="step" data-phase="decide"  data-status="default">Decide</li>
-        <li class="step" data-phase="report"  data-status="default">Report</li>
-      </ol>
-
-      <div class="mission-step">
-        <span class="muted">current step</span>
-        <div id="mission-step" class="mission-step-text">Awaiting trigger…</div>
-      </div>
-
-      <ol id="mission-feed" class="mission-feed"></ol>
     </section>
   </main>
 
-  <section class="card evidence-card">
+  <section class="card mission-card">
     <header class="card-head">
-      <span class="card-title">Evidence report</span>
-      <span id="evidence-count" class="card-tag">0</span>
+      <span class="card-title">Mission</span>
+      <span id="mission-pill" class="card-tag" data-state="idle">idle</span>
     </header>
-    <div id="evidence-gallery" class="evidence-gallery">
-      <div class="evidence-empty">Evidence reports the agent captures will appear here in order.</div>
+
+    <div class="mission-head">
+      <div>
+        <div class="mh-id"      id="mission-id">—</div>
+        <div class="mh-trigger" id="mission-trigger">awaiting trigger</div>
+      </div>
+      <div>
+        <div class="mh-timer"><span id="mission-elapsed">0.0</span><span class="unit">s</span></div>
+        <div class="mh-timer-cap">cap 90.0 s · <span id="mission-evidence-count">0</span> frames</div>
+      </div>
     </div>
+
+    <ol class="stepper" id="mission-stepper">
+      <li class="step" data-phase="trigger" data-status="default">Trigger</li>
+      <li class="step" data-phase="inspect" data-status="default">Inspect</li>
+      <li class="step" data-phase="decide"  data-status="default">Decide</li>
+      <li class="step" data-phase="report"  data-status="default">Report</li>
+    </ol>
+
+    <div class="mission-step">
+      <span class="muted">current step</span>
+      <div id="mission-step" class="mission-step-text">Awaiting trigger…</div>
+    </div>
+
+    <ol id="mission-feed" class="mission-feed"></ol>
   </section>
 
   <script src="/static/dashboard.js"></script>
