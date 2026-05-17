@@ -22,7 +22,7 @@ verifies before escalating is the product.
   internet and the original Tello has no station mode.
 
 > Pivoted from BetaFPV Air75 / DroneForge / NimbusOS / RadioMaster. The old
-> `firedrone/` folder is preserved as a historical reference but not used.
+> `firedrone/` code has been removed; this project is Tello-only.
 
 ## Software stack
 
@@ -54,11 +54,12 @@ dropped even with explicit firewall allow rules.
 [Mic] ──► audio.py ──┐
                       ▼
                  agent.py ──► OpenAI Agents SDK (reasoning + tool calls)
-                  │   ▲
-[Tello] ──► drone.py    │   │
-   │ camera   │  │   vision.py ──► OpenAI vision (gpt-4o / gpt-4o-mini)
-   │ state    │  │
-   │ commands ▼  │
+                  │   ▲   ▲
+[Tello] ──► drone.py    │   │   │
+   │ camera   │  │     │   vision.py ──► OpenAI vision (gpt-4o / gpt-4o-mini)
+   │ state    │  │     │
+   │ commands │  │     perception.py ── MiDaS depth + cv2 optical flow (local)
+   │          ▼  │
    │       main.py (FastAPI: WS + MJPEG + REST)
    │              │
    │     ┌────────┴────────┐
@@ -80,6 +81,11 @@ dropped even with explicit firewall allow rules.
 - **Audio**: FFT-based detector for the ~3-4 kHz pulsed pattern of a
   residential smoke alarm. Pure DSP, no ML model. (`sounddevice` for input,
   `numpy` for the FFT.)
+- **Perception (local)**: **MiDaS v2.1 Small** monocular depth model
+  (~21 MB ONNX) loaded via `cv2.dnn.readNet` — no torch, no transformers,
+  ~50-80 ms per inference at 256×256 on CPU. Plus **Farnebäck dense optical
+  flow** via `cv2.calcOpticalFlowFarneback` for a reactive watchdog. Both
+  run on-device. No new Python deps; OpenCV is already installed.
 - FastAPI + vanilla HTML/CSS/JS dashboard. No build step.
 - Notifier: simulated alert banner on the dashboard. Twilio SMS optional.
 
@@ -124,16 +130,54 @@ badge + a "simulate alarm" button for testing.
 Goal: reliable alarm detection against YouTube clips played through a
 speaker, decoupled from anything that flies.
 
+### Phase B.5 — Perception / safety layer
+
+The original Tello has **no forward distance sensor**, so obstacle
+avoidance has to come from the camera. Two pieces, both local:
+
+`tello/perception.py`:
+
+1. **Optical-flow watchdog (always on)** — Farnebäck dense flow via
+   `cv2.calcOpticalFlowFarneback` on the live video stream, ~10-15 Hz in
+   a background thread. Computes the focus of expansion of the flow
+   field; if vectors radiate outward strongly, the drone is rushing
+   toward something. Raises a `proximity_alert` flag → dashboard
+   auto-hovers via `drone.set_velocity(0, 0, 0, 0)`, agent is notified.
+   ~15-30 ms per frame, no ML.
+2. **MiDaS depth check (on demand)** —
+   `check_path_clear(direction) -> {clear, closest_band, confidence}`.
+   Loads MiDaS v2.1 Small ONNX once at startup via `cv2.dnn.readNet`.
+   Samples a few frames over ~200 ms, averages the depth maps, inspects
+   the center band of the predicted depth for "near" pixels. Returns a
+   decision the agent acts on. ~60-100 ms per call.
+
+The agent calls `check_path_clear` before any forward / lateral / up
+move. The optical-flow watchdog runs unconditionally while the drone is
+in flight and overrides the agent if it trips. Together with the
+small-step movement pattern (≤ 50 cm per move), this bounds the worst
+case to a low-velocity bump rather than a collision.
+
+Goal: drone can be told to "explore" a cluttered room and reliably stops
+short of furniture, walls, and people without operator intervention.
+Bench-tested with hand-held obstacles before any autonomous flight.
+
 ### Phase C — Agent skeleton
 
 `tello/agent.py`: OpenAI Agents SDK loop with tools:
 
 - `take_off()`, `land()`, `emergency_stop()`, `move(direction, cm)`,
-  `rotate(direction, degrees)` — wrap the existing `Drone` methods
+  `rotate(direction, degrees)` — wrap the existing `Drone` methods.
+  Move tools **internally call `perception.check_path_clear(direction)`
+  first** and refuse the move (returning a "path blocked" result the
+  agent can reason about) if it isn't safe.
 - `analyze_current_view()` — wraps `vision.analyze_frame()`
 - `report_real_fire(description, severity)` /
   `report_false_alarm(reason)` — terminal tools, end the loop
 - `return_and_land()` — terminal tool, safe abort
+
+The optical-flow watchdog from Phase B.5 runs alongside the agent and
+can interrupt any in-progress move (drone auto-hovers, agent gets a
+proximity-alert event in its tool result stream).
 
 System prompt frames the agent as an autonomous fire-safety operator.
 Hard 90-second flight cap enforced inside `agent.py`. Reasoning streams
@@ -190,6 +234,12 @@ decision, simulated notification.
 - Hard 90-second agent flight cap (enforced inside `agent.py`).
 - Battery <15% turns the indicator red on the dashboard; auto-land is not
   enforced in code yet, manual land required.
-- Always fly in a cleared room. No obstacle avoidance, no physical RC
-  override on the original Tello.
+- **Original Tello has no forward distance sensor.** Obstacle avoidance
+  is software-only (MiDaS depth check before moves + optical-flow
+  watchdog during moves — see Phase B.5) and probabilistic. It reduces
+  but does not eliminate the chance of bumping something. Always fly in
+  a cleared room with no glass / curtains / people within ~2 m, at low
+  altitude.
+- No physical RC override on the original Tello — `Esc` from the
+  dashboard is the only kill switch.
 - Have 2-3 charged batteries on hand for the demo (Tello hover ~13 min).
