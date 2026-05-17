@@ -884,6 +884,79 @@ if (els.perception.check) {
   });
 }
 
+// ----------------------------- depth view toggle ----------------------------- //
+//
+// Manual on/off. When ON we POST /api/depth/start (server spins up a MiDaS
+// render thread at ~3 Hz) and point an <img> at /depth.mjpg. When OFF we
+// POST /api/depth/stop, clear the <img> src, and let the layout collapse
+// back to a single-pane camera view.
+
+const depthToggleBtn = document.getElementById("btn-depth-toggle");
+const depthPane     = document.getElementById("depth-pane");
+const depthFeedImg  = document.getElementById("depth-feed");
+const depthOverlay  = document.getElementById("depth-overlay");
+const videoPane     = document.querySelector(".video-pane");
+
+let depthEnabled = false;
+let depthFirstFrameSeen = false;
+
+function setDepthOverlayText(msg) {
+  if (!depthOverlay) return;
+  const txt = depthOverlay.querySelector(".depth-overlay-text");
+  if (txt) txt.textContent = msg;
+  depthOverlay.classList.remove("hidden");
+}
+
+if (depthFeedImg) {
+  // First successful frame -> hide the "loading model" overlay. MJPEG
+  // streams fire onload on every frame in some browsers; we only care
+  // about the first one to dismiss the overlay.
+  depthFeedImg.addEventListener("load", () => {
+    if (!depthFirstFrameSeen) {
+      depthFirstFrameSeen = true;
+      depthOverlay?.classList.add("hidden");
+    }
+  });
+  depthFeedImg.addEventListener("error", () => {
+    if (depthEnabled) setDepthOverlayText("Depth feed dropped — retrying…");
+  });
+}
+
+async function setDepthView(enable) {
+  if (!depthToggleBtn || !depthPane || !depthFeedImg || !videoPane) return;
+
+  depthToggleBtn.disabled = true;
+  try {
+    if (enable) {
+      videoPane.dataset.depth = "on";
+      depthFirstFrameSeen = false;
+      setDepthOverlayText("Loading depth model…");
+      depthPane.hidden = false;
+      await fetch("/api/depth/start", { method: "POST" });
+      depthFeedImg.src = "/depth.mjpg?t=" + Date.now();
+      depthToggleBtn.dataset.on = "true";
+      depthToggleBtn.textContent = "Depth view · ON";
+      depthEnabled = true;
+    } else {
+      videoPane.dataset.depth = "off";
+      depthFeedImg.removeAttribute("src");
+      depthPane.hidden = true;
+      await fetch("/api/depth/stop", { method: "POST" });
+      depthToggleBtn.dataset.on = "false";
+      depthToggleBtn.textContent = "Depth view";
+      depthEnabled = false;
+    }
+  } catch (err) {
+    log("error", `depth toggle: ${err}`);
+  } finally {
+    depthToggleBtn.disabled = false;
+  }
+}
+
+if (depthToggleBtn) {
+  depthToggleBtn.addEventListener("click", () => setDepthView(!depthEnabled));
+}
+
 // ----------------------------- agent ----------------------------- //
 
 const agentRun = {

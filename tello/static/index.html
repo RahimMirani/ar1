@@ -62,7 +62,7 @@
   </header>
 
   <main class="layout">
-    <section class="video-pane">
+    <section class="video-pane" data-depth="off">
       <div class="video-frame">
         <img id="video" alt="Tello live video feed" />
 
@@ -108,6 +108,17 @@
 
         <div id="video-overlay" class="video-overlay">
           <div class="video-overlay-text">Standby — click connect</div>
+        </div>
+      </div>
+
+      <div id="depth-pane" class="depth-frame" hidden>
+        <img id="depth-feed" alt="MiDaS depth visualisation" />
+        <div class="depth-label">
+          <span class="depth-label-title">Depth · MiDaS small</span>
+          <span class="depth-label-sub">red = near · blue = far</span>
+        </div>
+        <div id="depth-overlay" class="depth-overlay">
+          <div class="depth-overlay-text">Loading depth model…</div>
         </div>
       </div>
     </section>
@@ -252,6 +263,7 @@
         </h2>
         <div class="row">
           <button id="btn-perception-check" class="btn">Check forward path</button>
+          <button id="btn-depth-toggle" class="btn" data-on="false">Depth view</button>
         </div>
         <div id="perception-line" class="perception-line">
           <span class="muted">flow score</span>

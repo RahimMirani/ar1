@@ -41,6 +41,7 @@ from events import bus  # noqa: E402
 from vision import analyze_frame  # noqa: E402
 from audio import monitor as audio_monitor  # noqa: E402
 from perception import OpticalFlowWatchdog, check_path_clear  # noqa: E402
+from depth_stream import DEPTH_HZ, DepthStream  # noqa: E402
 from agent import (  # noqa: E402
     configure as agent_configure,
     mission_state,
@@ -73,6 +74,11 @@ perception_watchdog = OpticalFlowWatchdog(
     drone_stop=drone.stop_velocity,
 )
 
+# Live MiDaS visualisation. Pure render thread — never touches the drone
+# beyond pulling the latest frame. Start/stop is operator-controlled via
+# the Depth view toggle in the console.
+depth_stream = DepthStream(get_frame=drone.get_frame)
+
 # Inject the live drone + watchdog into agent.py so its @function_tool
 # callables can drive them.
 agent_configure(drone, perception_watchdog)
@@ -97,6 +103,7 @@ async def lifespan(_app: FastAPI):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        depth_stream.stop()
         drone.close()
 
 
@@ -287,6 +294,73 @@ async def api_perception_stop() -> dict[str, Any]:
 @app.get("/api/perception/status")
 async def api_perception_status() -> dict[str, Any]:
     return perception_watchdog.status().to_dict()
+
+
+# --------------------------------------------------------------------------- #
+# Depth visualisation stream
+# --------------------------------------------------------------------------- #
+
+
+@app.post("/api/depth/start")
+async def api_depth_start() -> dict[str, Any]:
+    return (await asyncio.to_thread(depth_stream.start)).to_dict()
+
+
+@app.post("/api/depth/stop")
+async def api_depth_stop() -> dict[str, Any]:
+    return (await asyncio.to_thread(depth_stream.stop)).to_dict()
+
+
+@app.get("/api/depth/status")
+async def api_depth_status() -> dict[str, Any]:
+    return depth_stream.status().to_dict()
+
+
+def _depth_mjpeg_generator():
+    """Yield JPEG frames from the depth stream as multipart/x-mixed-replace.
+
+    Unlike :func:`_mjpeg_generator` (which encodes per-call from the live
+    camera), the depth pipeline pre-encodes on its own 3 Hz worker. We
+    just poll the cached buffer at the same cadence. If the stream is
+    stopped or hasn't produced its first frame yet, we hold the
+    connection open and resume once a buffer becomes available.
+    """
+    boundary = b"--frame"
+    period = 1.0 / DEPTH_HZ
+    last_sent_id: int | None = None
+    last_payload: bytes | None = None
+    while True:
+        time.sleep(period)
+        payload = depth_stream.latest_jpeg()
+        if payload is None:
+            # No frame yet (or stream stopped). Re-send the last frame
+            # so the <img> tag doesn't blank out during a brief gap.
+            if last_payload is None:
+                continue
+            payload = last_payload
+        else:
+            if id(payload) == last_sent_id:
+                # Worker hasn't produced a new frame yet; skip.
+                continue
+            last_sent_id = id(payload)
+            last_payload = payload
+
+        yield (
+            boundary
+            + b"\r\nContent-Type: image/jpeg\r\nContent-Length: "
+            + str(len(payload)).encode()
+            + b"\r\n\r\n"
+            + payload
+            + b"\r\n"
+        )
+
+
+@app.get("/depth.mjpg")
+async def depth_mjpg() -> StreamingResponse:
+    return StreamingResponse(
+        _depth_mjpeg_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
 
 
 @app.post("/api/perception/check")
