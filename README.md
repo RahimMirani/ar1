@@ -1,5 +1,6 @@
-# FireDrone
+# AR1 (Aerial Rover 1)
 <img width="3024" height="1964" alt="image" src="https://github.com/user-attachments/assets/b7a96d55-80d6-4267-a5ae-0c2e528e931f" />
+<img width="3024" height="1964" alt="image" src="https://github.com/user-attachments/assets/fceee167-7213-49ba-8d5c-b3413cb5f397" />
 
 Autonomous fire-response drone agent. When a fire alarm sounds, the drone
 arms, flies a quick inspection of the room via its camera, and decides
